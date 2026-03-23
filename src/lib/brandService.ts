@@ -25,6 +25,18 @@ export async function getCompanySettingsFromServer(): Promise<CompanySettings | 
   return mapDbRowToSettings(data[0]);
 }
 
+export async function getCompanySettingsFromServerForBrand(brandId: string): Promise<CompanySettings | null> {
+  if (!supabase) return null;
+  if (!brandId) return null;
+  const { data, error } = await supabase.from('brands').select('*').eq('id', brandId).maybeSingle();
+  if (error) {
+    console.error('getCompanySettingsFromServerForBrand error', error);
+    return null;
+  }
+  if (!data) return null;
+  return mapDbRowToSettings(data);
+}
+
 export async function uploadLogo(file: File, companyId?: string): Promise<string | null> {
   if (!supabase) return null;
   try {

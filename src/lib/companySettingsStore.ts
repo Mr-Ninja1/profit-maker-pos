@@ -1,6 +1,7 @@
 import type { CompanySettings } from '@/types/company';
 
-const STORAGE_KEY = 'pmx.companySettings.v1';
+const LEGACY_STORAGE_KEY = 'pmx.companySettings.v1';
+const STORAGE_KEY_PREFIX = 'pmx.companySettings.v1.';
 
 export const defaultCompanySettings: CompanySettings = {
   appName: 'Mthunzi-Smart',
@@ -9,9 +10,15 @@ export const defaultCompanySettings: CompanySettings = {
   brandType: 'restaurant',
 };
 
-export const getCompanySettings = (): CompanySettings => {
+function getKey(brandId?: string | null) {
+  return brandId ? `${STORAGE_KEY_PREFIX}${brandId}` : LEGACY_STORAGE_KEY;
+}
+
+export const getCompanySettings = (brandId?: string | null): CompanySettings => {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const key = getKey(brandId);
+    const raw = localStorage.getItem(key);
+
     if (!raw) return defaultCompanySettings;
     const parsed = JSON.parse(raw) as Partial<CompanySettings>;
 
@@ -24,6 +31,6 @@ export const getCompanySettings = (): CompanySettings => {
   }
 };
 
-export const saveCompanySettings = (settings: CompanySettings) => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+export const saveCompanySettings = (settings: CompanySettings, brandId?: string | null) => {
+  localStorage.setItem(getKey(brandId), JSON.stringify(settings));
 };

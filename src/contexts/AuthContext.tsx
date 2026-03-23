@@ -1,5 +1,7 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabaseClient';
+import type { UserRole, RolePermissions } from '@/types/auth';
+import { ROLE_PERMISSIONS } from '@/types/auth';
 import {
   clearAuthRelatedAppCaches,
   loadAuthSnapshot,
@@ -7,28 +9,114 @@ import {
   setActiveUserId,
 } from '@/lib/authCache';
 
-// Simplified User type to match your 'staff' table
-interface User {
+type AccountUser = {
   id: string;
   name: string;
   email: string;
   role: string;
   is_super_admin: boolean;
   brand_id?: string | null;
+};
+
+export type BrandStaffUser = {
+  id: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  pin?: string;
+  isActive: boolean;
+  brand_id?: string | null;
+  createdAt?: string;
+};
+
+const OPERATOR_KEY_PREFIX = 'pmx.operatorId.v1.';
+const STAFF_SESSION_KEY = 'pmx.staff.session.v1';
+
+type StaffSession = {
+  v: 1;
+  staff: BrandStaffUser;
+  brand: any;
+  sessionToken: string;
+  cachedAt: number;
+};
+
+function loadStaffSession(): StaffSession | null {
+  try {
+    const raw = localStorage.getItem(STAFF_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<StaffSession>;
+    if (parsed.v !== 1) return null;
+    if (!parsed.staff || typeof (parsed.staff as any).id !== 'string') return null;
+    if (!parsed.brand || typeof (parsed.brand as any).id !== 'string') return null;
+    if (!parsed.sessionToken || typeof parsed.sessionToken !== 'string') return null;
+    return parsed as StaffSession;
+  } catch {
+    return null;
+  }
+}
+
+function saveStaffSession(session: StaffSession) {
+  try {
+    localStorage.setItem(STAFF_SESSION_KEY, JSON.stringify(session));
+  } catch {
+    // ignore
+  }
+}
+
+function clearStaffSession() {
+  try {
+    localStorage.removeItem(STAFF_SESSION_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+function isUserRole(role: unknown): role is UserRole {
+  return (
+    role === 'owner' ||
+    role === 'manager' ||
+    role === 'cashier' ||
+    role === 'waitron' ||
+    role === 'kitchen_staff' ||
+    role === 'bar_staff'
+  );
+}
+
+function normalizeRole(role: unknown): UserRole {
+  if (isUserRole(role)) return role;
+  return 'owner';
+}
+
+function mapUnderBrandStaffRow(row: any): BrandStaffUser {
+  return {
+    id: String(row.id),
+    name: String(row.name ?? ''),
+    email: String(row.email ?? ''),
+    role: normalizeRole(row.role),
+    pin: row.pin ?? undefined,
+    isActive: Boolean(row.is_active ?? row.isActive ?? true),
+    brand_id: row.brand_id ?? null,
+    createdAt: row.created_at ?? row.createdAt,
+  };
 }
 
 interface AuthContextType {
-  user: User | null;
+  user: BrandStaffUser | null;
+  accountUser: AccountUser | null;
   brand: any | null;
+  staffSessionToken: string | null;
   loading: boolean;
   profileReady: boolean;
   isAuthenticated: boolean;
   signInWithGoogle: () => Promise<void>;
   signUp: (opts: { email: string; password: string; displayName?: string }) => Promise<{ ok: boolean; needsConfirmation?: boolean; message?: string }>;
   login: (email: string, password: string) => Promise<boolean>;
+  staffLogin: (email: string, pin: string) => Promise<{ ok: boolean; message?: string; role?: UserRole }>;
   logout: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   allUsers: any[];
+  operatorUsers: BrandStaffUser[];
+  switchUser: (operatorId: string) => void;
   createUser: (u: any) => Promise<any>;
   updateUser: (userId: string, patch: any) => Promise<void>;
   deleteUser: (userId: string) => Promise<void>;
@@ -40,11 +128,19 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Do not bootstrap auth from app-managed localStorage; Supabase already persists sessions.
   // A stale local cache here can make the app behave like it "needs a cache clear" to recover.
-  const [user, setUser] = useState<User | null>(null);
+  const [accountUser, setAccountUser] = useState<AccountUser | null>(null);
+  const [user, setUser] = useState<BrandStaffUser | null>(null);
   const [brand, setBrand] = useState<any | null>(null);
-  const [allUsers, setAllUsers] = useState<any[]>([]);
+  const [staffSessionToken, setStaffSessionToken] = useState<string | null>(null);
+  const [allUsers, setAllUsers] = useState<BrandStaffUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [profileReady, setProfileReady] = useState(false);
+
+  // Supabase can emit an initial SIGNED_OUT event during boot (no session).
+  // We must not treat that as a real logout, otherwise staff POS sessions restored from
+  // localStorage can get wiped on every reload.
+  const hadSupabaseSessionRef = useRef(false);
+  const sessionCheckDoneRef = useRef(false);
 
   const withTimeout = async <T,>(p: PromiseLike<T>, ms = 10000): Promise<T> => {
     let timer: any;
@@ -118,7 +214,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (staff) {
-        const nextUser: User = {
+        const nextAccountUser: AccountUser = {
           id: staff.user_id ?? staff.id,
           name: staff.full_name ?? staff.display_name ?? 'User',
           email: staff.email,
@@ -140,14 +236,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
-        setUser(nextUser);
+        // Keep the authenticated account user separate from the POS/operator user.
+        // By default, operator starts as the account user role.
+        setAccountUser(nextAccountUser);
+        setUser({
+          id: nextAccountUser.id,
+          name: nextAccountUser.name,
+          email: nextAccountUser.email,
+          role: normalizeRole(nextAccountUser.role),
+          pin: undefined,
+          isActive: true,
+          brand_id: nextAccountUser.brand_id ?? (nextBrand?.id ?? null),
+          createdAt: undefined,
+        });
         setBrand(nextBrand);
         setActiveUserId(userId);
         saveAuthSnapshot({
           v: 1,
           userId,
           cachedAt: Date.now(),
-          user: nextUser,
+          user: nextAccountUser as any,
           brand: nextBrand
             ? {
                 id: nextBrand.id ?? null,
@@ -193,31 +301,67 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     // Auth Safety Timeout
+    // Only used as a last-resort escape hatch; do not flip the app into "logged out"
+    // while we're still determining whether a Supabase session exists.
     timeoutId = setTimeout(() => {
-      if (loading) setLoading(false);
-    }, 3000);
+      if (!sessionCheckDoneRef.current) {
+        setLoading(false);
+        setProfileReady(true);
+      }
+    }, 12000);
 
     // 1. Check active session on mount
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!mounted) return;
 
       const userId = session?.user?.id ?? null;
+      sessionCheckDoneRef.current = true;
       if (!userId) {
+        // No authenticated session — try restoring a staff POS session.
+        const restored = loadStaffSession();
+        if (restored?.staff && restored?.brand) {
+          setAccountUser(null);
+          setUser(restored.staff);
+          setBrand(restored.brand);
+          setStaffSessionToken(restored.sessionToken);
+          setLoading(false);
+          setProfileReady(true);
+          return;
+        }
+
         setActiveUserId(null);
         setUser(null);
+        setAccountUser(null);
         setBrand(null);
+        setStaffSessionToken(null);
         setLoading(false);
         setProfileReady(true);
         return;
       }
+
+      hadSupabaseSessionRef.current = true;
 
       setActiveUserId(userId);
 
       // Fast-path: hydrate from local snapshot for this specific session user.
       const snap = loadAuthSnapshot(userId);
       if (snap?.user) {
-        setUser(snap.user as any);
+        // Snapshot stores the account user; operator will be restored from local operator key.
+        const acct = snap.user as any;
+        setAccountUser(acct);
         setBrand(snap.brand ?? null);
+        // IMPORTANT: also hydrate the active operator immediately so the app doesn't
+        // briefly render the public Landing screen before the background refresh completes.
+        setUser({
+          id: String(acct.id ?? userId),
+          name: String(acct.name ?? 'User'),
+          email: String(acct.email ?? ''),
+          role: normalizeRole(acct.role),
+          pin: undefined,
+          isActive: true,
+          brand_id: acct.brand_id ?? ((snap.brand as any)?.id ?? null),
+          createdAt: undefined,
+        });
         setLoading(false);
       }
 
@@ -231,24 +375,44 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (event === 'SIGNED_IN' && session?.user) {
         const userId = session.user.id;
+        hadSupabaseSessionRef.current = true;
         setActiveUserId(userId);
         setProfileReady(false);
+        setStaffSessionToken(null);
 
         const snap = loadAuthSnapshot(userId);
         if (snap?.user) {
-          setUser(snap.user as any);
+          const acct = snap.user as any;
+          setAccountUser(acct);
           setBrand(snap.brand ?? null);
+          setUser({
+            id: String(acct.id ?? userId),
+            name: String(acct.name ?? 'User'),
+            email: String(acct.email ?? ''),
+            role: normalizeRole(acct.role),
+            pin: undefined,
+            isActive: true,
+            brand_id: acct.brand_id ?? ((snap.brand as any)?.id ?? null),
+            createdAt: undefined,
+          });
           setLoading(false);
         }
 
         await fetchProfileAndBrand(userId);
       } else if (event === 'SIGNED_OUT') {
+        // Ignore initial SIGNED_OUT during boot when we never had a Supabase session.
+        // This avoids wiping locally-restored staff sessions on reload.
+        if (!hadSupabaseSessionRef.current) return;
+
         setUser(null);
+        setAccountUser(null);
         setBrand(null);
+        setStaffSessionToken(null);
         setLoading(false);
         setProfileReady(true);
         setActiveUserId(null);
         clearAuthRelatedAppCaches();
+        clearStaffSession();
       }
     });
 
@@ -264,17 +428,101 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       if (!supabase) return;
       try {
-        if (brand?.id) {
-          const { data, error } = await supabase.from('staff').select('*').eq('brand_id', brand.id);
-          if (!error && data) setAllUsers(data as any[]);
-        } else {
+        if (!brand?.id) {
           setAllUsers([]);
+          return;
+        }
+
+        const { data, error } = await supabase
+          .from('under_brand_staff')
+          .select('*')
+          .eq('brand_id', brand.id)
+          .order('created_at', { ascending: false });
+
+        if (!error && data) {
+          const list = (data as any[]).map(mapUnderBrandStaffRow);
+          setAllUsers(list);
+
+          // Restore previously selected operator for this brand, if any.
+          try {
+            const rawId = localStorage.getItem(`${OPERATOR_KEY_PREFIX}${brand.id}`);
+            const operatorId = rawId ? String(rawId) : null;
+            if (operatorId) {
+              const match = list.find((u) => u.id === operatorId);
+              if (match) setUser(match);
+            }
+          } catch {
+            // ignore
+          }
         }
       } catch (e) {
         // ignore
       }
     })();
   }, [brand]);
+
+  const operatorUsers: BrandStaffUser[] = React.useMemo(() => {
+    // Ensure current operator is always present in the list (even when unauthenticated)
+    // so the header dropdown doesn't break.
+    const current = user ? [user] : [];
+
+    const acct = accountUser && (brand?.id || accountUser.brand_id) ? {
+      id: accountUser.id,
+      name: `${accountUser.name} (Admin)`,
+      email: accountUser.email,
+      role: normalizeRole(accountUser.role),
+      pin: undefined,
+      isActive: true,
+      brand_id: accountUser.brand_id ?? (brand?.id ?? null),
+      createdAt: undefined,
+    } : null;
+    const list = acct ? [acct, ...allUsers] : allUsers;
+
+    // Merge unique by id, preserving order: current -> list
+    const seen = new Set<string>();
+    const merged: BrandStaffUser[] = [];
+    for (const u of [...current, ...list]) {
+      if (!u?.id) continue;
+      if (seen.has(u.id)) continue;
+      seen.add(u.id);
+      merged.push(u);
+    }
+    return merged;
+  }, [accountUser, allUsers, brand?.id, user]);
+
+  const switchUser = (operatorId: string) => {
+    if (!operatorId) return;
+
+    // Switch back to admin/operator
+    if (accountUser && operatorId === accountUser.id) {
+      const next: BrandStaffUser = {
+        id: accountUser.id,
+        name: accountUser.name,
+        email: accountUser.email,
+        role: normalizeRole(accountUser.role),
+        pin: undefined,
+        isActive: true,
+        brand_id: accountUser.brand_id ?? (brand?.id ?? null),
+        createdAt: undefined,
+      };
+      setUser(next);
+      try {
+        if (brand?.id) localStorage.setItem(`${OPERATOR_KEY_PREFIX}${brand.id}`, operatorId);
+      } catch {
+        // ignore
+      }
+      return;
+    }
+
+    const match = allUsers.find((u) => u.id === operatorId);
+    if (!match) return;
+    setUser(match);
+    try {
+      if (brand?.id) localStorage.setItem(`${OPERATOR_KEY_PREFIX}${brand.id}`, operatorId);
+    } catch {
+      // ignore
+    }
+  };
 
   const signInWithGoogle = async () => {
     const { error } = await supabase.auth.signInWithOAuth({
@@ -359,6 +607,74 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const staffLogin = async (email: string, pin: string) => {
+    if (!supabase) return { ok: false, message: 'Supabase not configured' };
+    const cleanEmail = email.trim();
+    const cleanPin = pin.trim();
+    if (!cleanEmail) return { ok: false, message: 'Enter your staff email.' };
+    if (!/^\d{4}$/.test(cleanPin)) return { ok: false, message: 'Enter your 4-digit PIN.' };
+
+    try {
+      const { data, error } = await withTimeout(
+        supabase.rpc('under_brand_staff_login_with_session', { p_email: cleanEmail, p_pin: cleanPin }),
+        15000
+      );
+
+      if (error) {
+        console.error('staffLogin rpc error', error);
+        return { ok: false, message: 'Unable to login right now. Please try again.' };
+      }
+
+      const row = Array.isArray(data) ? data[0] : (data as any);
+      if (!row || !row.brand_id) {
+        return {
+          ok: false,
+          message:
+            'Your details did not match any brand staff. Ensure the admin added you to a brand and that your account is active.',
+        };
+      }
+
+      const sessionToken = String(row.session_token ?? '').trim();
+      if (!sessionToken) {
+        return { ok: false, message: 'Login succeeded but no session token was issued. Please try again.' };
+      }
+
+      // Fetch brand (public select policy)
+      const { data: brandRow, error: brandErr } = await withTimeout(
+        supabase.from('brands').select('*').eq('id', row.brand_id).maybeSingle(),
+        15000
+      );
+      if (brandErr || !brandRow) {
+        return { ok: false, message: 'Your staff account is valid, but the brand could not be loaded.' };
+      }
+
+      const staffUser: BrandStaffUser = {
+        id: String(row.id),
+        name: String(row.name ?? ''),
+        email: String(row.email ?? cleanEmail),
+        role: normalizeRole(row.role),
+        pin: undefined,
+        isActive: true,
+        brand_id: String(row.brand_id),
+        createdAt: undefined,
+      };
+
+      setAccountUser(null);
+      setUser(staffUser);
+      setBrand(brandRow);
+      setStaffSessionToken(sessionToken);
+      setLoading(false);
+      setProfileReady(true);
+
+      saveStaffSession({ v: 1, staff: staffUser, brand: brandRow, sessionToken, cachedAt: Date.now() });
+
+      return { ok: true, role: staffUser.role };
+    } catch (e: any) {
+      console.error('staffLogin unexpected', e);
+      return { ok: false, message: e?.message ?? 'Login failed' };
+    }
+  };
+
   const login = async (email: string, password: string): Promise<boolean> => {
     if (!supabase) return false;
     try {
@@ -389,31 +705,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setActiveUserId(null);
     }
     setUser(null);
+    setAccountUser(null);
     setBrand(null);
+    setAllUsers([]);
+    setStaffSessionToken(null);
+    clearStaffSession();
   };
 
   // Staff admin CRUD helpers
   const createUser = async (newUser: any) => {
     try {
+      if (!supabase) throw new Error('Supabase not configured');
+      if (!brand?.id) throw new Error('No active brand');
+
+      const pin = String(newUser.pin ?? '').trim();
+      if (!pin) throw new Error('PIN is required');
+
       const row = {
-        user_id: null,
-        brand_id: brand?.id ?? null,
-        display_name: newUser.name,
-        email: newUser.email,
-        role: newUser.role,
+        brand_id: brand.id,
+        name: String(newUser.name ?? '').trim(),
+        email: String(newUser.email ?? '').trim(),
+        role: String(newUser.role ?? 'waitron'),
+        pin,
         is_active: newUser.isActive ?? true,
       } as any;
+
       if (supabase) {
-        const { data, error } = await supabase.from('staff').insert(row).select().limit(1);
-        if (!error && data && data[0]) {
-          setAllUsers(prev => [data[0], ...prev]);
-          return data[0];
+        const { data, error } = await supabase.from('under_brand_staff').insert(row).select().limit(1);
+        if (error) throw error;
+        if (data && data[0]) {
+          const created = mapUnderBrandStaffRow(data[0]);
+          setAllUsers((prev) => [created, ...prev]);
+          return created;
         }
       }
-      // fallback local
-      const created = { ...row, id: `local-${Date.now()}` };
-      setAllUsers(prev => [created, ...prev]);
-      return created;
+      throw new Error('Failed to create staff user');
     } catch (e) {
       console.error('createUser error', e);
       throw e;
@@ -422,14 +748,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const updateUser = async (userId: string, patch: any) => {
     try {
-      if (supabase) {
-        const { data, error } = await supabase.from('staff').update(patch).eq('user_id', userId).select().limit(1);
-        if (!error && data && data[0]) {
-          setAllUsers(prev => prev.map(u => (u.user_id === userId ? { ...u, ...data[0] } : u)));
-          return;
-        }
+      if (!supabase) return;
+
+      const dbPatch: any = {};
+      if (patch.name !== undefined) dbPatch.name = String(patch.name).trim();
+      if (patch.email !== undefined) dbPatch.email = String(patch.email).trim();
+      if (patch.role !== undefined) dbPatch.role = String(patch.role);
+      if (patch.pin !== undefined) dbPatch.pin = String(patch.pin).trim();
+      if (patch.isActive !== undefined) dbPatch.is_active = Boolean(patch.isActive);
+
+      const { data, error } = await supabase
+        .from('under_brand_staff')
+        .update(dbPatch)
+        .eq('id', userId)
+        .select()
+        .limit(1);
+
+      if (error) throw error;
+      if (data && data[0]) {
+        const updated = mapUnderBrandStaffRow(data[0]);
+        setAllUsers((prev) => prev.map((u) => (u.id === userId ? updated : u)));
       }
-      setAllUsers(prev => prev.map(u => (u.user_id === userId ? { ...u, ...patch } : u)));
     } catch (e) {
       console.error('updateUser error', e);
     }
@@ -437,12 +776,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const deleteUser = async (userId: string) => {
     try {
-      if (supabase) {
-        const { error } = await supabase.from('staff').delete().eq('user_id', userId);
-        if (!error) setAllUsers(prev => prev.filter(u => u.user_id !== userId));
-        return;
-      }
-      setAllUsers(prev => prev.filter(u => u.user_id !== userId));
+      if (!supabase) return;
+      const { error } = await supabase.from('under_brand_staff').delete().eq('id', userId);
+      if (!error) setAllUsers((prev) => prev.filter((u) => u.id !== userId));
     } catch (e) {
       console.error('deleteUser error', e);
     }
@@ -450,9 +786,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const hasPermission = (perm: string) => {
     if (!user) return false;
-    if (user.role === 'owner' || user.role === 'admin') return true;
-    if (user.role === 'manager' && perm !== 'manageSettings') return true;
-    return false;
+    const perms = ROLE_PERMISSIONS[user.role] as RolePermissions | undefined;
+    if (!perms) return false;
+    const key = perm as keyof RolePermissions;
+    return Boolean(perms[key]);
   };
 
   const refreshProfile = async () => {
@@ -473,16 +810,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   return (
     <AuthContext.Provider value={{ 
       user, 
+      accountUser,
       brand, 
+      staffSessionToken,
       loading, 
       profileReady,
       isAuthenticated: !!user, 
       signInWithGoogle,
       signUp,
       login,
+      staffLogin,
       logout,
       refreshProfile,
       allUsers,
+      operatorUsers,
+      switchUser,
       createUser,
       updateUser,
       deleteUser,

@@ -2,7 +2,7 @@
 // Authentication & Authorization Types
 // ============================================
 
-export type UserRole = 'owner' | 'manager' | 'waitron' | 'kitchen_staff' | 'bar_staff';
+export type UserRole = 'owner' | 'manager' | 'cashier' | 'waitron' | 'kitchen_staff' | 'bar_staff';
 
 export interface User {
   id: string;
@@ -117,6 +117,34 @@ export const ROLE_PERMISSIONS: Record<UserRole, RolePermissions> = {
     viewSettings: true,
     manageSettings: false,
   },
+  cashier: {
+    viewDashboard: false,
+    viewReports: false,
+    viewManagementOverview: false,
+    viewInventory: false,
+    manageInventory: false,
+    performStockTake: false,
+    createStockIssues: false,
+    viewRecipes: false,
+    manageRecipes: false,
+    recordBatchProduction: false,
+    viewPurchases: false,
+    createGRV: false,
+    confirmGRV: false,
+    viewStaff: false,
+    manageStaff: false,
+    accessPOS: true,
+    createOrders: true,
+    processPayments: true,
+    applyDiscounts: false,
+    voidItems: false,
+    transferTables: false,
+    viewOwnCashUp: true,
+    viewAllCashUps: false,
+    performCashUp: true,
+    viewSettings: false,
+    manageSettings: false,
+  },
   waitron: {
     viewDashboard: false,
     viewReports: false,
@@ -207,6 +235,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, RolePermissions> = {
 export const ROLE_NAMES: Record<UserRole, string> = {
   owner: 'Owner',
   manager: 'Manager',
+  cashier: 'Cashier',
   waitron: 'Waitron',
   kitchen_staff: 'Kitchen Staff',
   bar_staff: 'Bar Staff',

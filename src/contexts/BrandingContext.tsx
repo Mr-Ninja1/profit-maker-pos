@@ -2,12 +2,12 @@ import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import type { CompanySettings } from '@/types/company';
 import { defaultCompanySettings, getCompanySettings, saveCompanySettings } from '@/lib/companySettingsStore';
 import { hexToHslVar } from '@/lib/color';
+import { useAuth } from '@/contexts/AuthContext';
 import {
-  getCompanySettingsFromServer,
+  getCompanySettingsFromServerForBrand,
   uploadLogo,
   createCompanySettingsOnServer,
   updateCompanySettingsOnServer,
-  getFirstCompanyRowId,
 } from '@/lib/brandService';
 
 type BrandingContextValue = {
@@ -42,10 +42,27 @@ const applyBrandingToDocument = (settings: CompanySettings) => {
 };
 
 export function BrandingProvider({ children }: { children: React.ReactNode }) {
-  const [settings, setSettings] = useState<CompanySettings>(() => getCompanySettings());
+  const { brand } = useAuth();
+  const brandId = (brand as any)?.id ?? null;
+
+  const [settings, setSettings] = useState<CompanySettings>(() => getCompanySettings(brandId));
   const [brandExists, setBrandExists] = useState<boolean>(false);
 
-  // Fetch server settings once on mount with branding fallback and cleanup
+  // Load cached settings whenever the active brand changes.
+  useEffect(() => {
+    setSettings(getCompanySettings(brandId));
+
+    // Quick best-effort sync from the brand row (prevents placeholder flashes).
+    if (brandId && brand) {
+      setSettings((prev) => ({
+        ...prev,
+        appName: (brand as any).name ?? prev.appName,
+        primaryColorHex: (brand as any).primary_color_hex ?? prev.primaryColorHex,
+      }));
+    }
+  }, [brandId, brand]);
+
+  // Fetch server settings for the active brand (brand-aware) with fallback and cleanup
   useEffect(() => {
     let cancelled = false;
     const withTimeout = async <T,>(p: Promise<T>, ms = 3000): Promise<T> => {
@@ -62,7 +79,12 @@ export function BrandingProvider({ children }: { children: React.ReactNode }) {
 
     (async () => {
       try {
-        const server = await withTimeout(getCompanySettingsFromServer(), 3000);
+        if (!brandId) {
+          setBrandExists(false);
+          return;
+        }
+
+        const server = await withTimeout(getCompanySettingsFromServerForBrand(String(brandId)), 8000);
         if (cancelled) return;
 
         if (server) {
@@ -80,12 +102,12 @@ export function BrandingProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [brandId]);
 
   useEffect(() => {
     applyBrandingToDocument(settings);
-    saveCompanySettings(settings);
-  }, [settings]);
+    saveCompanySettings(settings, brandId);
+  }, [settings, brandId]);
 
   const saveToServer = async (next: Partial<CompanySettings>, logoFile?: File | null, createdBy?: string | null) => {
     try {
@@ -146,7 +168,7 @@ export function BrandingProvider({ children }: { children: React.ReactNode }) {
         logoDataUrl: logoUrl ?? next.logoDataUrl,
       };
 
-      const existingId = await getFirstCompanyRowId();
+      const existingId = brandId ? String(brandId) : null;
       let result = null;
       const withTimeout = async <T,>(p: Promise<T>, ms = 15000): Promise<T> => {
         let timer: any;

@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
-import { useBranding } from '@/contexts/BrandingContext';
 
 interface LoginOverlayProps {
   onClose?: () => void;
@@ -10,9 +9,10 @@ interface LoginOverlayProps {
 export default function LoginOverlay({ onClose }: LoginOverlayProps) {
   const auth = useAuth();
   const navigate = useNavigate();
-  const { brandExists } = useBranding();
+  const [mode, setMode] = useState<'admin' | 'staff'>('admin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [pin, setPin] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [isSignup, setIsSignup] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -49,6 +49,44 @@ export default function LoginOverlay({ onClose }: LoginOverlayProps) {
     setError(null);
     setBusy(true);
     try {
+      // Staff login is separate from Supabase Auth (admins)
+      if (mode === 'staff') {
+        const cleanEmail = email.trim();
+        const cleanPin = pin.trim();
+
+        if (!cleanEmail) {
+          setError('Enter your staff email.');
+          return;
+        }
+        if (!/^\d{4}$/.test(cleanPin)) {
+          setError('Enter your 4-digit PIN.');
+          return;
+        }
+
+        const res = await withTimeout(auth.staffLogin(cleanEmail, cleanPin), 20000);
+        if (!res.ok) {
+          setError(
+            res.message ||
+              'Your details did not match any brand staff. Ensure you belong to a brand and your admin has added you.'
+          );
+          return;
+        }
+
+        const role = res.role;
+        if (role === 'kitchen_staff') {
+          navigate('/app/pos/kitchen');
+          return;
+        }
+
+        if (role === 'cashier') {
+          navigate('/app/pos');
+          return;
+        }
+
+        navigate('/app/pos/terminal');
+        return;
+      }
+
       if (isSignup) {
         // validate password before calling signup
         const errs = validatePassword(password);
@@ -64,8 +102,7 @@ export default function LoginOverlay({ onClose }: LoginOverlayProps) {
         if (res.ok) {
           // If we were able to auto-sign-in on the backend, proceed into the app.
           if ((res as any).autoSignedIn) {
-            if (!brandExists) navigate('/app/company-settings');
-            else navigate('/app');
+            navigate('/app');
             return;
           }
 
@@ -81,8 +118,7 @@ export default function LoginOverlay({ onClose }: LoginOverlayProps) {
       } else {
         const ok = await withTimeout(auth.login(email.trim(), password), 20000);
         if (ok) {
-          if (!brandExists) navigate('/app/company-settings');
-          else navigate('/app');
+          navigate('/app');
         } else {
           setError('Invalid credentials');
         }
@@ -117,6 +153,42 @@ export default function LoginOverlay({ onClose }: LoginOverlayProps) {
           </button>
         )}
         <form onSubmit={submitLogin} className="space-y-4">
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('admin');
+                  setError(null);
+                }}
+                disabled={busy}
+                className={`px-3 py-2 rounded border text-sm font-medium ${mode === 'admin' ? 'bg-gray-100' : 'bg-white hover:bg-gray-50'}`}
+              >
+                Admin Login
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('staff');
+                  setIsSignup(false);
+                  setPassword('');
+                  setPasswordErrors([]);
+                  setDisplayName('');
+                  setError(null);
+                }}
+                disabled={busy}
+                className={`px-3 py-2 rounded border text-sm font-medium ${mode === 'staff' ? 'bg-gray-100' : 'bg-white hover:bg-gray-50'}`}
+              >
+                Staff POS Login
+              </button>
+            </div>
+
+            {mode === 'staff' && (
+              <div className="rounded-md border bg-gray-50 px-3 py-2 text-sm text-gray-700">
+                Use the staff email and 4-digit PIN set by your admin. If your details don’t match, ask the admin to add you to their brand.
+              </div>
+            )}
+
+            {mode === 'admin' && (
             <button
               type="button"
               onClick={googleSignIn}
@@ -131,17 +203,20 @@ export default function LoginOverlay({ onClose }: LoginOverlayProps) {
               </svg>
               Continue with Google
             </button>
-            <div className="text-center text-sm text-gray-500">or continue with email</div>
+            )}
+            <div className="text-center text-sm text-gray-500">
+              {mode === 'admin' ? 'or continue with email' : 'or continue with staff email'}
+            </div>
             <div>
             {/* Simple success modal shown when account is created but not auto-logged-in */}
             {showSuccess && (
-              <div className="fixed inset-0 flex items-center justify-center z-60">
+              <div className="fixed inset-0 flex items-center justify-center z-[60]">
                 <div className="absolute inset-0 bg-black/40" onClick={() => setShowSuccess(false)} />
                 <div className="relative bg-white rounded-lg p-6 shadow-lg max-w-sm text-center">
                   <h3 className="text-lg font-semibold mb-2">Account created</h3>
                   <p className="mb-4">Your account was created successfully. Please sign in.</p>
                   <div className="flex justify-center">
-                    <button className="px-4 py-2 bg-primary text-white rounded" onClick={() => setShowSuccess(false)}>OK</button>
+                    <button type="button" className="px-4 py-2 bg-primary text-white rounded" onClick={() => setShowSuccess(false)}>OK</button>
                   </div>
                 </div>
               </div>
@@ -167,30 +242,49 @@ export default function LoginOverlay({ onClose }: LoginOverlayProps) {
                 onChange={(e) => setEmail(e.target.value)}
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium mb-1 text-black">Password</label>
-              <input
-                type="password"
-                required
-                className="w-full border rounded px-3 py-2 text-black"
-                value={password}
-                onChange={(e) => {
-                  setPassword(e.target.value);
-                  if (isSignup) setPasswordErrors(validatePassword(e.target.value));
-                }}
-              />
-              {isSignup && password && (
-                <div className="mt-2 text-sm">
-                  {passwordErrors.length === 0 ? (
-                    <div className="text-green-600">Password looks good</div>
-                  ) : (
-                    <ul className="text-red-600 list-disc list-inside">
-                      {passwordErrors.map((p) => <li key={p}>{p}</li>)}
-                    </ul>
-                  )}
-                </div>
-              )}
-            </div>
+            {mode === 'admin' ? (
+              <div>
+                <label className="block text-sm font-medium mb-1 text-black">Password</label>
+                <input
+                  type="password"
+                  required
+                  className="w-full border rounded px-3 py-2 text-black"
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    if (isSignup) setPasswordErrors(validatePassword(e.target.value));
+                  }}
+                />
+                {isSignup && password && (
+                  <div className="mt-2 text-sm">
+                    {passwordErrors.length === 0 ? (
+                      <div className="text-green-600">Password looks good</div>
+                    ) : (
+                      <ul className="text-red-600 list-disc list-inside">
+                        {passwordErrors.map((p) => <li key={p}>{p}</li>)}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div>
+                <label className="block text-sm font-medium mb-1 text-black">PIN</label>
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  maxLength={4}
+                  required
+                  className="w-full border rounded px-3 py-2 text-black"
+                  value={pin}
+                  onChange={(e) => {
+                    const next = (e.target.value ?? '').replace(/\D/g, '').slice(0, 4);
+                    setPin(next);
+                  }}
+                  placeholder="4 digits"
+                />
+              </div>
+            )}
             {error && <div className="text-sm text-red-600">{error}</div>}
             <div className="flex justify-end">
               <button
@@ -198,19 +292,26 @@ export default function LoginOverlay({ onClose }: LoginOverlayProps) {
                 disabled={busy || (isSignup && passwordErrors.length > 0)}
                 className="px-4 py-2 bg-primary text-white rounded hover:bg-primary-dark disabled:opacity-50"
               >
-                {busy ? (isSignup ? 'Creating…' : 'Signing…') : (isSignup ? 'Create account' : 'Sign in')}
+                {busy
+                  ? (mode === 'admin' ? (isSignup ? 'Creating…' : 'Signing…') : 'Signing…')
+                  : (mode === 'admin' ? (isSignup ? 'Create account' : 'Sign in') : 'Sign in')}
               </button>
             </div>
             <div className="mt-3 text-sm text-center">
-              {isSignup ? (
+              {mode === 'admin' && isSignup ? (
                 <>
                   <span>Already have an account? </span>
-                  <button onClick={() => setIsSignup(false)} className="text-primary underline">Sign in</button>
+                  <button type="button" onClick={() => setIsSignup(false)} className="text-primary underline">Sign in</button>
+                </>
+              ) : mode === 'admin' ? (
+                <>
+                  <span>Need an account? </span>
+                  <button type="button" onClick={() => setIsSignup(true)} className="text-primary underline">Create one</button>
                 </>
               ) : (
                 <>
-                  <span>Need an account? </span>
-                  <button onClick={() => setIsSignup(true)} className="text-primary underline">Create one</button>
+                  <span className="text-gray-600">Staff can’t create accounts here. </span>
+                  <span className="text-gray-600">Ask your admin to add you.</span>
                 </>
               )}
             </div>

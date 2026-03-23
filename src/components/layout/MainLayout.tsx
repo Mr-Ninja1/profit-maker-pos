@@ -22,7 +22,7 @@ import { CurrencyPicker } from '@/components/common/CurrencyPicker';
 
 export function MainLayout() {
   const location = useLocation();
-  const { user, logout, switchUser, allUsers } = useAuth();
+    const { user, logout, switchUser, operatorUsers } = useAuth();
   const { settings } = useBranding();
 
   useOfflineOrderSync();
@@ -85,7 +85,7 @@ export function MainLayout() {
                   <DropdownMenuLabel className="text-xs text-muted-foreground">
                     Switch User
                   </DropdownMenuLabel>
-                  {allUsers.map((u) => (
+                    {operatorUsers.map((u) => (
                     <DropdownMenuItem
                       key={u.id}
                       onClick={() => switchUser(u.id)}

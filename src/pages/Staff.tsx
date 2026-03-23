@@ -22,6 +22,7 @@ export default function Staff() {
   const [editRole, setEditRole] = useState<UserRole>('waitron');
   const [editPin, setEditPin] = useState('');
   const [editActive, setEditActive] = useState(true);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const canManage = hasPermission('manageStaff');
 
@@ -51,33 +52,50 @@ export default function Staff() {
     setEditActive(u.isActive);
   };
 
-  const save = () => {
+  const save = async () => {
     if (!canManage) return;
+    setFormError(null);
     const name = editName.trim();
     const email = editEmail.trim();
+    const pin = editPin.trim();
     if (!name || !email) return;
 
-    if (editingId === 'new') {
-      createUser({
-        name,
-        email,
-        role: editRole,
-        pin: editPin.trim() || undefined,
-        isActive: editActive,
-      });
-      setEditingId(null);
+    // under_brand_staff requires a 4-digit PIN for POS login
+    if (!/^\d{4}$/.test(pin)) {
+      setFormError('PIN must be exactly 4 digits.');
       return;
     }
 
+    if (editingId === 'new') {
+      try {
+        await createUser({
+          name,
+          email,
+          role: editRole,
+          pin,
+          isActive: editActive,
+        });
+        setEditingId(null);
+        return;
+      } catch (e: any) {
+        setFormError(e?.message ?? 'Failed to add staff.');
+        return;
+      }
+    }
+
     if (editingId) {
-      updateUser(editingId, {
-        name,
-        email,
-        role: editRole,
-        pin: editPin.trim() || undefined,
-        isActive: editActive,
-      });
-      setEditingId(null);
+      try {
+        await updateUser(editingId, {
+          name,
+          email,
+          role: editRole,
+          pin,
+          isActive: editActive,
+        });
+        setEditingId(null);
+      } catch (e: any) {
+        setFormError(e?.message ?? 'Failed to update staff.');
+      }
     }
   };
 
@@ -146,6 +164,10 @@ export default function Staff() {
               </Select>
             </div>
           </div>
+
+          {formError && (
+            <div className="mt-2 text-sm text-red-600">{formError}</div>
+          )}
 
           <div className="flex items-center justify-end gap-2 mt-4">
             <Button variant="outline" onClick={() => setEditingId(null)}>Cancel</Button>

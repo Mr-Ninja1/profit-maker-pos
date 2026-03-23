@@ -8,13 +8,21 @@ export default function Landing() {
   const navigate = useNavigate();
   const [showLogin, setShowLogin] = useState(false);
 
+  const getDefaultAppRouteForRole = (role: string | undefined) => {
+    if (role === 'kitchen_staff') return '/app/pos/kitchen';
+    if (role === 'waitron' || role === 'bar_staff') return '/app/pos/terminal';
+    // cashier + everything else defaults to POS home
+    return '/app/pos';
+  };
+
   useEffect(() => {
     if (!loading) {
       if (user) {
         if (!brand) {
           navigate('/app/company-settings');
         } else {
-          navigate('/app/pos');
+          // Role-aware default landing after login
+          navigate(getDefaultAppRouteForRole(user.role));
         }
       }
     }

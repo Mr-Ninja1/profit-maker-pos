@@ -26,8 +26,11 @@ import {
 } from '@/lib/kitchenStore';
 import useKitchenRealtime from '@/hooks/useKitchenRealtime';
 import { fetchAndReplaceOrdersFromSupabase } from '@/lib/orderStore';
+import { useAuth } from '@/contexts/AuthContext';
+import { ROLE_NAMES } from '@/types/auth';
 
 export default function KitchenDisplay() {
+  const { user } = useAuth();
   // subscribe to DB realtime events for kitchen items
   useKitchenRealtime();
   const prefersReducedMotion = useReducedMotion();
@@ -393,6 +396,16 @@ export default function KitchenDisplay() {
       <PageHeader
         title="Kitchen Display"
         description="Live kitchen screen (orders from POS)"
+        actions={
+          user ? (
+            <>
+              <Badge variant="secondary" className="max-w-[240px] truncate">
+                {user.name}
+              </Badge>
+              <Badge variant="outline">{ROLE_NAMES[user.role] ?? user.role}</Badge>
+            </>
+          ) : null
+        }
       />
 
       <div className="flex flex-col md:flex-row md:items-center gap-3 mb-4">
