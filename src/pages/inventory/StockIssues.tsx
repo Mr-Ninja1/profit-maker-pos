@@ -493,7 +493,7 @@ export default function StockIssues() {
                           <NumericCell value={issue.nowQty} />
                         </TableCell>
                         <TableCell className="text-right">
-                          <NumericCell value={issue.value} prefix="K " showSign colorCode />
+                          <NumericCell value={issue.value} money showSign colorCode />
                         </TableCell>
                       </TableRow>
                     ))}

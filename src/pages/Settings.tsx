@@ -1,7 +1,5 @@
 import { PageHeader } from '@/components/common/PageComponents';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { departments as seededDepartments } from '@/data/mockData';
-import { supabase, isSupabaseConfigured } from '@/lib/supabaseClient';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,6 +11,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { NavLink } from 'react-router-dom';
 import { useBranding } from '@/contexts/BrandingContext';
 import { getFeatureFlagsSnapshot, setFeatureEnabled, subscribeFeatureFlags } from '@/lib/featureFlagsStore';
+import { addCategory, getCategoriesSnapshot, refreshCategories, subscribeCategories } from '@/lib/categoriesStore';
+import { addSupplier, getSuppliersSnapshot, refreshSuppliers, subscribeSuppliers } from '@/lib/suppliersStore';
 
 export default function Settings() {
   const { hasPermission } = useAuth();
@@ -33,94 +33,41 @@ export default function Settings() {
     setSavedAt(new Date().toLocaleTimeString());
   };
 
-  const [departmentsList, setDepartmentsList] = useState<{ id: string; name: string }[]>([]);
-  const [newDeptName, setNewDeptName] = useState('');
-  const [suppliersList, setSuppliersList] = useState<{ id: string; name: string; code?: string }[]>([]);
+  const categoriesSnap = useSyncExternalStore(subscribeCategories, getCategoriesSnapshot, getCategoriesSnapshot);
+  const suppliersSnap = useSyncExternalStore(subscribeSuppliers, getSuppliersSnapshot, getSuppliersSnapshot);
+
+  const [newCategoryName, setNewCategoryName] = useState('');
   const [newSupplierName, setNewSupplierName] = useState('');
   const [newSupplierCode, setNewSupplierCode] = useState('');
 
   useEffect(() => {
-    let mounted = true;
-    const load = async () => {
-      if (isSupabaseConfigured() && supabase) {
-        try {
-          const { data, error } = await supabase.from('departments').select('id,name').order('name', { ascending: true });
-          if (error) throw error;
-          if (!mounted) return;
-          if (Array.isArray(data)) {
-            setDepartmentsList(data as any);
-            return;
-          }
-        } catch (err) {
-          console.warn('Failed to load departments from Supabase', err);
-        }
-      }
-      // fallback
-      setDepartmentsList(seededDepartments);
-    };
-    void load();
-    return () => { mounted = false; };
+    // Best-effort refresh when opening Settings.
+    void refreshCategories().catch(() => {});
+    void refreshSuppliers().catch(() => {});
   }, []);
 
-  useEffect(() => {
-    let mounted = true;
-    const load = async () => {
-      if (isSupabaseConfigured() && supabase) {
-        try {
-          const { data, error } = await supabase.from('suppliers').select('id,name,code').order('name', { ascending: true });
-          if (error) throw error;
-          if (!mounted) return;
-          if (Array.isArray(data)) {
-            setSuppliersList(data as any);
-            return;
-          }
-        } catch (err) {
-          console.warn('Failed to load suppliers from Supabase', err);
-        }
-      }
-      // fallback to empty
-      setSuppliersList([]);
-    };
-    void load();
-    return () => { mounted = false; };
-  }, []);
-
-  const addDepartment = async () => {
-    const name = newDeptName.trim();
+  const onAddCategory = async () => {
+    const name = newCategoryName.trim();
     if (!name) return;
-    setNewDeptName('');
-    if (isSupabaseConfigured() && supabase) {
-      try {
-        const { data, error } = await supabase.from('departments').insert({ name }).select('id,name').single();
-        if (error) throw error;
-        setDepartmentsList((s) => [data as any, ...s]);
-        return;
-      } catch (err) {
-        console.warn('Failed to insert department', err);
-        // fallback to local
-      }
+    setNewCategoryName('');
+    try {
+      await addCategory(name);
+    } catch (e) {
+      console.warn('Failed to add category', e);
     }
-    // local fallback
-    setDepartmentsList((s) => [{ id: `local-${Date.now()}`, name }, ...s]);
   };
 
-  const addSupplier = async () => {
+  const onAddSupplier = async () => {
     const name = newSupplierName.trim();
     const code = newSupplierCode.trim() || undefined;
     if (!name) return;
     setNewSupplierName('');
     setNewSupplierCode('');
-    if (isSupabaseConfigured() && supabase) {
-      try {
-        const { data, error } = await supabase.from('suppliers').insert({ name, code }).select('id,name,code').single();
-        if (error) throw error;
-        setSuppliersList((s) => [data as any, ...s]);
-        return;
-      } catch (err) {
-        console.warn('Failed to insert supplier', err);
-      }
+    try {
+      await addSupplier({ name, code });
+    } catch (e) {
+      console.warn('Failed to add supplier', e);
     }
-    setSuppliersList((s) => [{ id: `local-${Date.now()}`, name, code }, ...s]);
   };
 
   return (
@@ -150,7 +97,7 @@ export default function Settings() {
 
             {hasPermission('manageSettings') && (
               <Button asChild variant="outline">
-                <NavLink to="/company-settings">Open</NavLink>
+                <NavLink to="/app/company-settings">Open</NavLink>
               </Button>
             )}
           </div>
@@ -170,7 +117,7 @@ export default function Settings() {
           <div className="flex items-center gap-3">
             {hasPermission('manageSettings') && (
               <Button asChild variant="outline">
-                <NavLink to="/intelligence">Open</NavLink>
+                <NavLink to="/app/intelligence">Open</NavLink>
               </Button>
             )}
 
@@ -258,23 +205,23 @@ export default function Settings() {
       </Card>
 
       <Card>
-        <CardHeader><CardTitle className="text-base">Category</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="text-base">Categories</CardTitle></CardHeader>
         <CardContent>
           <div className="mb-4 flex gap-2">
             <Input
-              placeholder="New department name"
-              value={newDeptName}
-              onChange={(e) => setNewDeptName(e.target.value)}
+              placeholder="New category name"
+              value={newCategoryName}
+              onChange={(e) => setNewCategoryName(e.target.value)}
             />
-            <Button onClick={addDepartment} disabled={!newDeptName.trim() || !hasPermission('manageSettings')}>Add</Button>
+            <Button onClick={onAddCategory} disabled={!newCategoryName.trim() || !hasPermission('manageSettings')}>Add</Button>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-            {departmentsList.length === 0 ? (
+            {categoriesSnap.categories.length === 0 ? (
               <div className="text-sm text-muted-foreground">No categories defined.</div>
             ) : (
-              departmentsList.map((dept) => (
-                <div key={dept.id} className="p-3 bg-muted rounded-md text-sm">{dept.name}</div>
+              categoriesSnap.categories.map((cat) => (
+                <div key={cat.id} className="p-3 bg-muted rounded-md text-sm">{cat.name}</div>
               ))
             )}
           </div>
@@ -295,14 +242,14 @@ export default function Settings() {
               value={newSupplierCode}
               onChange={(e) => setNewSupplierCode(e.target.value)}
             />
-            <Button onClick={addSupplier} disabled={!newSupplierName.trim() || !hasPermission('manageSettings')}>Add</Button>
+            <Button onClick={onAddSupplier} disabled={!newSupplierName.trim() || !hasPermission('manageSettings')}>Add</Button>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-            {suppliersList.length === 0 ? (
+            {suppliersSnap.suppliers.length === 0 ? (
               <div className="text-sm text-muted-foreground">No suppliers defined.</div>
             ) : (
-              suppliersList.map((s) => (
+              suppliersSnap.suppliers.map((s) => (
                 <div key={s.id} className="p-3 bg-muted rounded-md text-sm">{s.name}{s.code ? ` • ${s.code}` : ''}</div>
               ))
             )}

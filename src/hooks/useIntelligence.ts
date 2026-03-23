@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { GRV, Expense, StockItem, Recipe } from '@/types';
 import type { Order } from '@/types/pos';
 import { subscribeOrders, getOrdersSnapshot } from '@/lib/orderStore';
-import { subscribeGRVs, getGRVsSnapshot } from '@/lib/grvStore';
+import { subscribeGRVs, getGRVsSnapshot, refreshGRVs } from '@/lib/grvDbStore';
 import { subscribeExpenses, getExpensesSnapshot } from '@/lib/expenseStore';
 import { subscribeStockItems, getStockItemsSnapshot } from '@/lib/stockStore';
 import { subscribeManufacturingRecipes, getManufacturingRecipesSnapshot } from '@/lib/manufacturingRecipeStore';
 import { usePosMenu } from '@/hooks/usePosMenu';
 import { cleanOrdersForIntelligence } from '@/lib/intelligence/cleanRestaurantData';
+import { useAuth } from '@/contexts/AuthContext';
 
 function round2(n: number) {
   return Math.round((n + Number.EPSILON) * 100) / 100;
@@ -71,12 +72,20 @@ export type IntelligenceFilters = {
 };
 
 export function useIntelligence(range: IntelligenceRange, filters?: IntelligenceFilters) {
+  const { user, brand, accountUser } = useAuth();
   const orders = useSyncExternalStore(subscribeOrders, getOrdersSnapshot, getOrdersSnapshot);
   const grvs = useSyncExternalStore(subscribeGRVs, getGRVsSnapshot, getGRVsSnapshot);
   const expenses = useSyncExternalStore(subscribeExpenses, getExpensesSnapshot, getExpensesSnapshot);
   const stockItems = useSyncExternalStore(subscribeStockItems, getStockItemsSnapshot, getStockItemsSnapshot);
   const recipes = useSyncExternalStore(subscribeManufacturingRecipes, getManufacturingRecipesSnapshot, getManufacturingRecipesSnapshot);
   const pos = usePosMenu();
+
+  const brandId = (user?.brand_id ?? brand?.id ?? '') as string;
+  useEffect(() => {
+    if (!accountUser) return;
+    if (!brandId) return;
+    void refreshGRVs(brandId).catch((e) => console.error('Failed to load GRVs', e));
+  }, [accountUser, brandId]);
 
   const [lastDataAt, setLastDataAt] = useState<number>(() => Date.now());
   const [livePulse, setLivePulse] = useState(false);

@@ -1,5 +1,5 @@
 // src/components/common/ReportSharerDemo.tsx
-import { useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useReportSharer } from '@/hooks/useReportSharer';
 import type { DailySalesReport } from '@/types';
 import type { Order } from '@/types/pos';
@@ -8,9 +8,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Share2 } from 'lucide-react';
 import { computeDashboardMetrics } from '@/lib/dashboardMetrics';
 import { getOrdersSnapshot, subscribeOrders } from '@/lib/orderStore';
-import { getGRVsSnapshot, subscribeGRVs } from '@/lib/grvStore';
+import { getGRVsSnapshot, subscribeGRVs, refreshGRVs } from '@/lib/grvDbStore';
 import { getExpensesSnapshot, subscribeExpenses } from '@/lib/expenseStore';
 import { getStockTakesSnapshot, subscribeStockTakes } from '@/lib/stockTakeStore';
+import { useAuth } from '@/contexts/AuthContext';
 
 function dateKeyLocal(d: Date) {
   const yyyy = d.getFullYear();
@@ -69,6 +70,7 @@ function buildDailySalesReport(params: { startDate: string; endDate: string; ord
 }
 
 const ReportSharerDemo = () => {
+  const { user, brand, accountUser } = useAuth();
   const { shareDailyReport, formatWhatsAppSummary } = useReportSharer();
   const [isSharing, setIsSharing] = useState(false);
 
@@ -76,6 +78,13 @@ const ReportSharerDemo = () => {
   const grvs = useSyncExternalStore(subscribeGRVs, getGRVsSnapshot, getGRVsSnapshot);
   const expenses = useSyncExternalStore(subscribeExpenses, getExpensesSnapshot, getExpensesSnapshot);
   const stockTakes = useSyncExternalStore(subscribeStockTakes, getStockTakesSnapshot, getStockTakesSnapshot);
+
+  const brandId = (user?.brand_id ?? brand?.id ?? '') as string;
+  useEffect(() => {
+    if (!accountUser) return;
+    if (!brandId) return;
+    void refreshGRVs(brandId).catch((e) => console.error('Failed to load GRVs', e));
+  }, [accountUser, brandId]);
 
   const today = useMemo(() => dateKeyLocal(new Date()), []);
   const [startDate, setStartDate] = useState<string>(today);

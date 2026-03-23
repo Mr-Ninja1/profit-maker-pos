@@ -152,8 +152,8 @@ const ProfitProtectionDemo = () => {
             <div>
               This page becomes “real” once you have paid orders and recipes.
               Create a sale in <Link to="/pos/terminal" className="underline">POS Terminal</Link>,
-              and ensure recipes exist in <Link to="/manufacturing/recipes" className="underline">Manufacturing → Recipes</Link>
-              (or use <Link to="/inventory/gaap" className="underline">Mthunzi-Smart</Link> to auto-build a starter recipe).
+              and ensure recipes exist in <Link to="/app/manufacturing/recipes" className="underline">Manufacturing → Recipes</Link>
+              (or use <Link to="/app/inventory/advanced-gaap" className="underline">Mthunzi-Smart</Link> to auto-build a starter recipe).
             </div>
           </div>
         ) : null}

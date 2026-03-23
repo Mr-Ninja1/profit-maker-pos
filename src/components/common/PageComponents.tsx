@@ -1,5 +1,6 @@
 import { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
+import { useCurrency } from '@/contexts/CurrencyContext';
 
 interface PageHeaderProps {
   title: string;
@@ -105,24 +106,41 @@ interface NumericCellProps {
   value: number;
   decimals?: number;
   prefix?: string;
+  money?: boolean;
   showSign?: boolean;
   colorCode?: boolean;
 }
 
-export function NumericCell({ value, decimals = 2, prefix = '', showSign = false, colorCode = false }: NumericCellProps) {
-  const formatted = value.toFixed(decimals);
-  const displayValue = showSign && value > 0 ? `+${formatted}` : formatted;
+export function NumericCell({ value, decimals = 2, prefix = '', money = false, showSign = false, colorCode = false }: NumericCellProps) {
+  const { formatMoneyPrecise } = useCurrency();
+
+  const n = Number.isFinite(value) ? value : 0;
+
+  const displayValue = (() => {
+    if (money) {
+      const absFormatted = formatMoneyPrecise(Math.abs(n), decimals);
+      if (n < 0) return `-${absFormatted}`;
+      if (showSign && n > 0) return `+${absFormatted}`;
+      return absFormatted;
+    }
+
+    const formatted = n.toLocaleString(undefined, {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    });
+    return showSign && n > 0 ? `+${formatted}` : formatted;
+  })();
   
   let colorClass = '';
   if (colorCode) {
-    if (value > 0) colorClass = 'status-positive';
-    else if (value < 0) colorClass = 'status-negative';
+    if (n > 0) colorClass = 'status-positive';
+    else if (n < 0) colorClass = 'status-negative';
     else colorClass = 'status-neutral';
   }
 
   return (
     <span className={cn('numeric', colorClass)}>
-      {prefix}{displayValue}
+      {money ? displayValue : `${prefix}${displayValue}`}
     </span>
   );
 }

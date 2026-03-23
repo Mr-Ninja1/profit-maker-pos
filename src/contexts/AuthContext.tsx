@@ -8,6 +8,8 @@ import {
   saveAuthSnapshot,
   setActiveUserId,
 } from '@/lib/authCache';
+import { ensureCategoriesLoaded, refreshCategories } from '@/lib/categoriesStore';
+import { ensureSuppliersLoaded, refreshSuppliers } from '@/lib/suppliersStore';
 
 type AccountUser = {
   id: string;
@@ -134,6 +136,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profileReady, setProfileReady] = useState(false);
   const [operatorPin, setOperatorPin] = useState<string | null>(null);
 
+  // Preload commonly used reference data so screens don't feel "lazy".
+  useEffect(() => {
+    if (!profileReady) return;
+    ensureCategoriesLoaded();
+    ensureSuppliersLoaded();
+    // Kick a background refresh (best-effort)
+    void refreshCategories().catch(() => {});
+    void refreshSuppliers().catch(() => {});
+  }, [profileReady]);
+
   // Supabase can emit an initial SIGNED_OUT event during boot (no session).
   // We must not treat that as a real logout, otherwise staff POS sessions restored from
   // localStorage can get wiped on every reload.
@@ -162,15 +174,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      // Fetch staff profile and join with brands table
-      let { data: staff, error } = await withTimeout(
-        supabase
-          .from('staff')
-          .select('*, brands(*)')
-          .eq('user_id', userId)
-          .maybeSingle(),
-        10000
+      // Fetch staff profile and join with brands table.
+      // This project has seen two schemas in the wild:
+      //  1) staff.user_id points to auth.users.id
+      //  2) staff.id IS auth.users.id (no user_id column)
+      let staff: any = null;
+      let error: any = null;
+      try {
+        const res = await withTimeout(
+          supabase
+            .from('staff')
+            .select('*, brands(*)')
+            .eq('user_id', userId)
+            .maybeSingle(),
+          10000
+        );
+        staff = (res as any)?.data ?? null;
+        error = (res as any)?.error ?? null;
+      } catch (e) {
+        error = e;
+      }
+
+      const msg = String((error as any)?.message ?? '');
+      const code = String((error as any)?.code ?? '');
+      const missingUserIdColumn = Boolean(
+        error &&
+          (
+            code === '42703' ||
+            (msg.toLowerCase().includes('user_id') && msg.toLowerCase().includes('does not exist'))
+          )
       );
+
+      if (missingUserIdColumn) {
+        // Fallback schema: staff.id == auth user id.
+        const res = await withTimeout(
+          supabase
+            .from('staff')
+            .select('*, brands(*)')
+            .eq('id', userId)
+            .maybeSingle(),
+          10000
+        );
+        staff = (res as any)?.data ?? null;
+        error = (res as any)?.error ?? null;
+      }
 
       // If no staff row found by user_id, attempt to find by email and link it to this user
       let firstLinked = false;
@@ -192,7 +239,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (byEmail) {
             staff = byEmail as any;
             // Attempt to set user_id on the existing staff row (if not set)
-            if (!staff.user_id) {
+            if ((staff as any).user_id !== undefined && !staff.user_id) {
               try {
                 await withTimeout(supabase.from('staff').update({ user_id: userId }).eq('id', staff.id), 10000);
                 staff.user_id = userId;
@@ -212,16 +259,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (staff) {
+        // If the join didn't return a brand row but we do have a brand_id, fetch it explicitly.
+        let nextBrand = (staff as any).brands || null;
+        if (!nextBrand && (staff as any).brand_id) {
+          try {
+            const { data: brandRow } = await withTimeout(
+              supabase.from('brands').select('*').eq('id', (staff as any).brand_id).maybeSingle(),
+              12000
+            );
+            nextBrand = brandRow ?? null;
+          } catch {
+            // Keep minimal brand object so the app can still resolve settings by brand id.
+            nextBrand = { id: (staff as any).brand_id } as any;
+          }
+        }
+
+        const { data: sessionData } = await withTimeout(supabase.auth.getSession(), 8000);
+        const authUser = (sessionData as any)?.session?.user ?? null;
+
         const nextAccountUser: AccountUser = {
-          id: staff.user_id ?? staff.id,
-          name: staff.full_name ?? staff.display_name ?? 'User',
-          email: staff.email,
-          role: staff.role,
+          // Always use the authenticated user id as the account id.
+          id: userId,
+          name: staff.full_name ?? staff.display_name ?? staff.name ?? authUser?.user_metadata?.full_name ?? 'User',
+          email: staff.email ?? authUser?.email ?? '',
+          role: staff.role ?? 'owner',
           is_super_admin: (staff as any).is_super_admin ?? false,
           brand_id: staff.brand_id,
         };
-
-        const nextBrand = staff.brands || null;
 
         // If this was the user's first time logging in and there's no brand yet,
         // make them the owner/admin for the upcoming brand creation flow.
@@ -347,7 +411,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Snapshot stores the account user; operator will be restored from local operator key.
         const acct = snap.user as any;
         setAccountUser(acct);
-        setBrand(snap.brand ?? null);
+        setBrand((snap.brand ?? (acct?.brand_id ? ({ id: acct.brand_id } as any) : null)) as any);
         setOperatorPin(null);
         // IMPORTANT: also hydrate the active operator immediately so the app doesn't
         // briefly render the public Landing screen before the background refresh completes.
@@ -383,7 +447,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (snap?.user) {
           const acct = snap.user as any;
           setAccountUser(acct);
-          setBrand(snap.brand ?? null);
+          setBrand((snap.brand ?? (acct?.brand_id ? ({ id: acct.brand_id } as any) : null)) as any);
           setUser({
             id: String(acct.id ?? userId),
             name: String(acct.name ?? 'User'),

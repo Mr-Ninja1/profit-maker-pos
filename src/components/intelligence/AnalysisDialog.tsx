@@ -13,9 +13,11 @@ import type { SupplierPurchaseOrderDraft } from '@/lib/purchasePlanner';
 import { purchasePlanToCsv } from '@/lib/purchasePlanner';
 import { downloadTextFile } from '@/lib/download';
 import { buildMailtoUrl, buildWhatsAppUrlTo, openExternal } from '@/lib/opsLinks';
-import { createDraftGRV } from '@/lib/grvStore';
+import { createDraftGRV as createDraftGRVLocal } from '@/lib/grvStore';
+import { createDraftGRV as createDraftGRVDb } from '@/lib/grvDbStore';
 import type { WeeklyReportData } from '@/lib/opsPdf';
 import { downloadPurchasePlanPdf, downloadWeeklyReportPdf } from '@/lib/opsPdf';
+import { useAuth } from '@/contexts/AuthContext';
 
 export type AnalysisMetric = {
   label: string;
@@ -76,6 +78,8 @@ export function AnalysisDialog(props: {
 }) {
   const model = props.model;
   const navigate = useNavigate();
+  const { user, brand, accountUser } = useAuth();
+  const brandId = (user?.brand_id ?? brand?.id ?? '') as string;
 
   const insights = model?.insights ?? [];
 
@@ -445,6 +449,9 @@ export function AnalysisDialog(props: {
                                     onClick={() => {
                                       if (!canDraft) return;
 
+                                      const isUuid = (value: string) =>
+                                        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+
                                       if (!mappingOk) {
                                         const ok = window.confirm(
                                           `Supplier mapping is ${mapping?.assignedPct.toFixed(0)}% with ${mapping?.unassigned} unassigned items.\n\nDraft GRVs may be incomplete or split incorrectly until mapping is cleaned.\n\nContinue?`
@@ -452,27 +459,43 @@ export function AnalysisDialog(props: {
                                         if (!ok) return;
                                       }
 
-                                      createDraftGRV({
+                                      const items = s.plan.rows.map((r) => {
+                                        const quantity = r.suggestedOrderQty;
+                                        const unitCost = r.unitCost;
+                                        const totalCost = Math.round(quantity * unitCost * 100) / 100;
+                                        return {
+                                          id: crypto.randomUUID(),
+                                          itemId: r.itemId,
+                                          itemCode: r.code,
+                                          itemName: r.name,
+                                          quantity,
+                                          unitCost,
+                                          totalCost,
+                                        };
+                                      });
+
+                                      if (accountUser && brandId) {
+                                        void createDraftGRVDb({
+                                          brandId,
+                                          supplierId: isUuid(s.supplierId) ? s.supplierId : '',
+                                          supplierName: s.supplierName,
+                                          date: new Date().toISOString().slice(0, 10),
+                                          paymentType: 'account',
+                                          receivedBy: 'System',
+                                          applyVat: true,
+                                          items,
+                                        });
+                                        return;
+                                      }
+
+                                      createDraftGRVLocal({
                                         supplierId: s.supplierId,
                                         supplierName: s.supplierName,
-                                        date: new Date().toISOString(),
+                                        date: new Date().toISOString().slice(0, 10),
                                         paymentType: 'account',
                                         receivedBy: 'System',
                                         applyVat: true,
-                                        items: s.plan.rows.map((r) => {
-                                          const quantity = r.suggestedOrderQty;
-                                          const unitCost = r.unitCost;
-                                          const totalCost = Math.round(quantity * unitCost * 100) / 100;
-                                          return {
-                                            id: `grvitem-${crypto.randomUUID()}`,
-                                            itemId: r.itemId,
-                                            itemCode: r.code,
-                                            itemName: r.name,
-                                            quantity,
-                                            unitCost,
-                                            totalCost,
-                                          };
-                                        }),
+                                        items,
                                       });
                                     }}
                                   >

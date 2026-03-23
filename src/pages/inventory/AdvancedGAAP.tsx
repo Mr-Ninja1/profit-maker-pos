@@ -14,13 +14,14 @@ import { Check, ChevronsUpDown, Sparkles, Wand2 } from 'lucide-react';
 
 import { usePosMenu } from '@/hooks/usePosMenu';
 import { getStockItemsSnapshot, subscribeStockItems, applyStockDeductions } from '@/lib/stockStore';
-import { getGRVsSnapshot, subscribeGRVs } from '@/lib/grvStore';
+import { getGRVsSnapshot, subscribeGRVs, refreshGRVs } from '@/lib/grvDbStore';
 import { getManufacturingRecipesSnapshot, subscribeManufacturingRecipes, upsertManufacturingRecipe } from '@/lib/manufacturingRecipeStore';
 import { computeCostTiersFromPurchases, type PurchaseLotLike } from '@/lib/purchaseCosting';
 import { addOrder } from '@/lib/orderStore';
 import { resetPosMenuToDefaults } from '@/lib/posMenuStore';
 import { computeMaxProducible, defaultQtyForUnitType, recommendSellingPrice, type PriceRounding, suggestIngredients } from '@/lib/mthunziSmartAssistant';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/contexts/AuthContext';
 
 function fmtMoney(n: number) {
   return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'ZMW' }).format(n);
@@ -31,10 +32,18 @@ function fmtPct(n: number) {
 }
 
 export default function AdvancedGAAP() {
+  const { user, brand, accountUser } = useAuth();
   const pos = usePosMenu();
   const stockItems = useSyncExternalStore(subscribeStockItems, getStockItemsSnapshot);
   const grvs = useSyncExternalStore(subscribeGRVs, getGRVsSnapshot);
   const recipes = useSyncExternalStore(subscribeManufacturingRecipes, getManufacturingRecipesSnapshot);
+
+  const brandId = (user?.brand_id ?? brand?.id ?? '') as string;
+  useEffect(() => {
+    if (!accountUser) return;
+    if (!brandId) return;
+    void refreshGRVs(brandId).catch((e) => console.error('Failed to load GRVs', e));
+  }, [accountUser, brandId]);
 
   const menuItems = pos.items;
   const [menuOpen, setMenuOpen] = useState(false);
@@ -351,7 +360,7 @@ export default function AdvancedGAAP() {
             <Link to="/pos/menu">Manage POS Menu</Link>
           </Button>
           <Button asChild variant="outline">
-            <Link to="/manufacturing/recipes">Manage Recipes</Link>
+            <Link to="/app/manufacturing/recipes">Manage Recipes</Link>
           </Button>
           <Button variant="default" onClick={() => setAssistantOpen(true)} disabled={!menuItems.length}>
             <Sparkles className="h-4 w-4 mr-2" />AI Coach
@@ -478,7 +487,7 @@ export default function AdvancedGAAP() {
         ) : !recipe ? (
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div className="text-sm text-destructive">
-              No recipe found for this menu item. Create one in <Link className="underline" to="/manufacturing/recipes">Manufacturing → Recipes</Link>.
+              No recipe found for this menu item. Create one in <Link className="underline" to="/app/manufacturing/recipes">Manufacturing → Recipes</Link>.
             </div>
             <div className="flex items-center gap-2">
               <Button

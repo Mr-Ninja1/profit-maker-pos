@@ -58,6 +58,7 @@ export function BrandingProvider({ children }: { children: React.ReactNode }) {
         ...prev,
         appName: (brand as any).name ?? prev.appName,
         primaryColorHex: (brand as any).primary_color_hex ?? prev.primaryColorHex,
+        currencyCode: (brand as any).brand_currency_code ?? prev.currencyCode,
       }));
     }
   }, [brandId, brand]);

@@ -161,20 +161,19 @@ export async function updateStockItem(itemId: string, patch: Partial<StockItem>)
     if (patch.supplierId !== undefined) payload.supplier_id = patch.supplierId;
     if (patch.departmentId !== undefined) payload.department_id = patch.departmentId;
 
-    try {
-      const { error } = await supabase.from('stock_items').update(payload).eq('id', itemId);
-      if (!error) {
-        await fetchFromDb();
-        return;
-      }
+    const { error } = await supabase.from('stock_items').update(payload).eq('id', itemId);
+    if (error) {
       console.warn('Supabase update failed', error);
-    } catch (err) {
-      console.warn('Supabase update error', err);
+      throw error;
     }
+
+    await fetchFromDb();
+    return;
   }
 
+  // Local-only mode (no Supabase)
   const existing = load();
-  const next = existing.map(s => (s.id === itemId ? { ...s, ...patch } : s));
+  const next = existing.map((s) => (s.id === itemId ? { ...s, ...patch } : s));
   state = next;
   persist(next);
   emit();

@@ -1,3 +1,4 @@
+import { useCurrency } from '@/contexts/CurrencyContext';
 import { 
   DollarSign, 
   TrendingUp, 
@@ -11,7 +12,7 @@ import {
   Truck,
   UtensilsCrossed
 } from 'lucide-react';
-import { useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { PageHeader, KPICard, DataTableWrapper, NumericCell, StatusBadge } from '@/components/common/PageComponents';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -42,16 +43,26 @@ import {
 } from '@/components/ui/table';
 
 import { subscribeOrders, getOrdersSnapshot } from '@/lib/orderStore';
-import { subscribeGRVs, getGRVsSnapshot } from '@/lib/grvStore';
+import { subscribeGRVs, getGRVsSnapshot, refreshGRVs } from '@/lib/grvDbStore';
 import { subscribeExpenses, getExpensesSnapshot, addExpense } from '@/lib/expenseStore';
 import { subscribeStockTakes, getStockTakesSnapshot } from '@/lib/stockTakeStore';
 import { computeDashboardMetrics } from '@/lib/dashboardMetrics';
+import { useAuth } from '@/contexts/AuthContext';
 
 export default function Dashboard() {
+  const { user, brand, accountUser } = useAuth();
+  const { formatMoneyPrecise, currencySymbol } = useCurrency();
   const orders = useSyncExternalStore(subscribeOrders, getOrdersSnapshot);
   const grvs = useSyncExternalStore(subscribeGRVs, getGRVsSnapshot);
   const expenses = useSyncExternalStore(subscribeExpenses, getExpensesSnapshot);
   const stockTakes = useSyncExternalStore(subscribeStockTakes, getStockTakesSnapshot);
+
+  const brandId = (user?.brand_id ?? brand?.id ?? '') as string;
+  useEffect(() => {
+    if (!accountUser) return;
+    if (!brandId) return;
+    void refreshGRVs(brandId).catch((e) => console.error('Failed to load GRVs', e));
+  }, [accountUser, brandId]);
 
   const today = useMemo(() => dateKeyLocal(new Date()), []);
   const [startDate, setStartDate] = useState<string>(today);
@@ -133,28 +144,28 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <KPICard
           title="Total Turnover (Incl)"
-          value={`K ${data.turnoverIncl.toLocaleString()}`}
-          subtitle={`Excl Tax: K ${data.turnoverExcl.toLocaleString()}`}
+          value={formatMoneyPrecise(data.turnoverIncl, 2)}
+          subtitle={`Excl Tax: ${formatMoneyPrecise(data.turnoverExcl, 2)}`}
           icon={<DollarSign className="h-5 w-5 text-primary" />}
         />
         <KPICard
           title="Cost of Sales"
-          value={`K ${data.costOfSales.toLocaleString()}`}
+          value={formatMoneyPrecise(data.costOfSales, 2)}
           subtitle={`${data.costOfSalesPercent.toFixed(2)}% of sales`}
           variant="warning"
           icon={<TrendingDown className="h-5 w-5 text-warning" />}
         />
         <KPICard
           title="Gross Profit"
-          value={`K ${data.grossProfit.toLocaleString()}`}
+          value={formatMoneyPrecise(data.grossProfit, 2)}
           subtitle={`${data.grossProfitPercent.toFixed(2)}%`}
           variant="success"
           icon={<TrendingUp className="h-5 w-5 text-success" />}
         />
         <KPICard
           title="Net Profit"
-          value={`K ${data.netProfit.toLocaleString()}`}
-          subtitle={`Expenses: K ${data.expenses.toLocaleString()}`}
+          value={formatMoneyPrecise(data.netProfit, 2)}
+          subtitle={`Expenses: ${formatMoneyPrecise(data.expenses, 2)}`}
           variant={data.netProfit >= 0 ? 'success' : 'danger'}
           icon={<DollarSign className={`h-5 w-5 ${data.netProfit >= 0 ? 'text-success' : 'text-destructive'}`} />}
         />
@@ -165,7 +176,7 @@ export default function Dashboard() {
         <KPICard
           title="Invoices"
           value={data.invoiceCount}
-          subtitle={`Avg: K ${data.avgPerInvoice.toFixed(2)}`}
+          subtitle={`Avg: ${formatMoneyPrecise(data.avgPerInvoice, 2)}`}
           icon={<Receipt className="h-4 w-4 text-muted-foreground" />}
         />
         <KPICard
@@ -176,18 +187,16 @@ export default function Dashboard() {
         <KPICard
           title="Tables"
           value={data.tableCount}
-          subtitle={`${data.minsPerTable.toFixed(1)} min/table`}
           icon={<Clock className="h-4 w-4 text-muted-foreground" />}
         />
         <KPICard
           title="Stock Variance"
-          value={`K ${data.stockVarianceValue.toFixed(2)}`}
-          variant={Math.abs(data.stockVarianceValue) > 500 ? 'danger' : 'default'}
+          value={formatMoneyPrecise(data.stockVarianceValue, 2)}
           icon={<AlertTriangle className="h-4 w-4 text-muted-foreground" />}
         />
         <KPICard
           title="Purchases"
-          value={`K ${data.purchases.toLocaleString()}`}
+          value={formatMoneyPrecise(data.purchases, 2)}
           icon={<Package className="h-4 w-4 text-muted-foreground" />}
         />
         <KPICard
@@ -203,30 +212,30 @@ export default function Dashboard() {
           <CardHeader className="pb-3">
             <CardTitle className="text-base font-medium">Payment Breakdown</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-3">
             {data.totalPaytypes > 0 ? (
               <>
                 <div className="flex justify-between text-sm">
                   <span>Cash</span>
-                  <span className="font-medium">K {data.cashTotal.toLocaleString()}</span>
+                  <span className="font-medium">{formatMoneyPrecise(data.cashTotal, 2)}</span>
                 </div>
                 <Progress value={(data.cashTotal / data.totalPaytypes) * 100} className="h-2" />
 
                 <div className="flex justify-between text-sm">
                   <span>Credit Card</span>
-                  <span className="font-medium">K {data.cardTotal.toLocaleString()}</span>
+                  <span className="font-medium">{formatMoneyPrecise(data.cardTotal, 2)}</span>
                 </div>
                 <Progress value={(data.cardTotal / data.totalPaytypes) * 100} className="h-2" />
 
                 <div className="flex justify-between text-sm">
                   <span>Cheque</span>
-                  <span className="font-medium">K {data.chequeTotal.toLocaleString()}</span>
+                  <span className="font-medium">{formatMoneyPrecise(data.chequeTotal, 2)}</span>
                 </div>
                 <Progress value={(data.chequeTotal / data.totalPaytypes) * 100} className="h-2" />
 
                 <div className="border-t pt-3 mt-3 flex justify-between font-medium">
                   <span>Total Paytypes</span>
-                  <span>K {data.totalPaytypes.toLocaleString()}</span>
+                  <span>{formatMoneyPrecise(data.totalPaytypes, 2)}</span>
                 </div>
               </>
             ) : (
@@ -249,7 +258,7 @@ export default function Dashboard() {
                 <span className="text-sm">Eat-In</span>
               </div>
               <div className="text-right">
-                <span className="font-medium">K {data.orderTypes.eatIn.value.toLocaleString()}</span>
+                <span className="font-medium">{formatMoneyPrecise(data.orderTypes.eatIn.value, 2)}</span>
                 <span className="text-xs text-muted-foreground ml-2">({data.orderTypes.eatIn.percent}%)</span>
               </div>
             </div>
@@ -260,7 +269,7 @@ export default function Dashboard() {
                 <span className="text-sm">Take-Out</span>
               </div>
               <div className="text-right">
-                <span className="font-medium">K {data.orderTypes.takeOut.value.toLocaleString()}</span>
+                <span className="font-medium">{formatMoneyPrecise(data.orderTypes.takeOut.value, 2)}</span>
                 <span className="text-xs text-muted-foreground ml-2">({data.orderTypes.takeOut.percent}%)</span>
               </div>
             </div>
@@ -271,7 +280,7 @@ export default function Dashboard() {
                 <span className="text-sm">Delivery</span>
               </div>
               <div className="text-right">
-                <span className="font-medium">K {data.orderTypes.delivery.value.toLocaleString()}</span>
+                <span className="font-medium">{formatMoneyPrecise(data.orderTypes.delivery.value, 2)}</span>
                 <span className="text-xs text-muted-foreground ml-2">({data.orderTypes.delivery.percent}%)</span>
               </div>
             </div>
@@ -324,7 +333,7 @@ export default function Dashboard() {
                         <NumericCell value={item.varianceQty} showSign colorCode />
                       </TableCell>
                       <TableCell className="text-right">
-                        <NumericCell value={item.varianceValue} prefix="K " showSign colorCode />
+                        <NumericCell value={item.varianceValue} money showSign colorCode />
                       </TableCell>
                     </TableRow>
                   ))}
@@ -356,7 +365,7 @@ export default function Dashboard() {
                     {lowSeller.itemName}
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    Qty {lowSeller.quantity} · K {lowSeller.totalSales.toFixed(0)}
+                    Qty {lowSeller.quantity} · {formatMoneyPrecise(lowSeller.totalSales, 0)}
                   </div>
                 </div>
               )}
@@ -379,7 +388,7 @@ export default function Dashboard() {
                       <TableCell className="font-medium">{item.itemName}</TableCell>
                       <TableCell className="text-right">{item.quantity}</TableCell>
                       <TableCell className="text-right">
-                        <NumericCell value={item.totalSales} prefix="K " />
+                        <NumericCell value={item.totalSales} money />
                       </TableCell>
                       <TableCell className="text-right">
                         <StatusBadge status={item.gpAfterDiscount >= 45 ? 'positive' : item.gpAfterDiscount >= 35 ? 'neutral' : 'negative'}>
@@ -426,7 +435,7 @@ export default function Dashboard() {
                       <TableCell className="font-medium">{member.name}</TableCell>
                       <TableCell className="capitalize">{member.role.replace('_', ' ')}</TableCell>
                       <TableCell className="text-right">
-                        <NumericCell value={member.totalSales} prefix="K " />
+                        <NumericCell value={member.totalSales} money />
                       </TableCell>
                       <TableCell className="text-right">
                         <NumericCell value={percent} decimals={1} />%
@@ -477,7 +486,7 @@ export default function Dashboard() {
             </div>
 
             <div className="grid gap-2">
-              <Label>Amount (K)</Label>
+              <Label>Amount ({currencySymbol})</Label>
               <Input
                 type="number"
                 inputMode="decimal"

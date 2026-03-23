@@ -239,7 +239,7 @@ export default function StockTake() {
                     </TableCell>
                     <TableCell className="text-right">
                       {varianceValue !== null ? (
-                        <NumericCell value={varianceValue} prefix="K " showSign colorCode />
+                        <NumericCell value={varianceValue} money showSign colorCode />
                       ) : (
                         <span className="text-muted-foreground">-</span>
                       )}
@@ -305,7 +305,7 @@ export default function StockTake() {
                               <NumericCell value={v.varianceQty} showSign colorCode />
                             </TableCell>
                             <TableCell className="text-right">
-                              <NumericCell value={v.varianceValue} prefix="K " showSign colorCode />
+                              <NumericCell value={v.varianceValue} money showSign colorCode />
                             </TableCell>
                           </TableRow>
                         ))}

@@ -8,6 +8,7 @@ export const defaultCompanySettings: CompanySettings = {
   tagline: 'Back Office + POS',
   primaryColorHex: '#2563eb',
   brandType: 'restaurant',
+  currencyCode: 'ZMW',
 };
 
 function getKey(brandId?: string | null) {

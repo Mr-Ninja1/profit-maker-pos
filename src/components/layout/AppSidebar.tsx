@@ -48,16 +48,15 @@ const posItems = [
   { title: 'POS Menu', url: '/app/pos/menu', icon: Receipt, permission: 'manageSettings' as const },
   { title: 'Table QR Codes', url: '/app/pos/table-qr', icon: QrCode, permission: 'accessPOS' as const },
   { title: 'Tables', url: '/app/pos/tables', icon: Grid3X3, permission: 'accessPOS' as const },
-  { title: 'Cash Up', url: '/app/pos/cash-up', icon: Calculator, permission: 'performCashUp' as const },
   { title: 'Kitchen Display', url: '/app/pos/kitchen', icon: UtensilsCrossed, permission: 'accessPOS' as const },
 ];
 
 const inventoryItems = [
   { title: 'Stock Items', url: '/app/inventory/items', icon: Package, permission: 'viewInventory' as const },
-  { title: 'Stock Issues', url: '/app/inventory/issues', icon: ArrowRightLeft, permission: 'createStockIssues' as const },
+  { title: 'Stock Issues', url: '/app/inventory/stock-issues', icon: ArrowRightLeft, permission: 'createStockIssues' as const },
   { title: 'Stock Take', url: '/app/inventory/stock-take', icon: ClipboardCheck, permission: 'performStockTake' as const },
-  { title: 'Mthunzi-Smart', url: '/app/inventory/gaap', icon: Calculator, permission: 'viewInventory' as const },
-  { title: 'Transfers (QR)', url: '/app/inventory/transfers-qr', icon: QrCode, permission: 'viewInventory' as const },
+  { title: 'Mthunzi-Smart', url: '/app/inventory/advanced-gaap', icon: Calculator, permission: 'viewInventory' as const },
+  { title: 'Transfers (QR)', url: '/app/inventory/transfer-qr', icon: QrCode, permission: 'viewInventory' as const },
 ];
 
 const manufacturingItems = [
@@ -93,13 +92,19 @@ export function AppSidebar() {
   const location = useLocation();
   const { state } = useSidebar();
   const { hasPermission } = useAuth();
-  const { settings, brandExists } = useBranding();
+  const { user, brand } = useAuth();
+  const { settings, brandExists: companySettingsExists } = useBranding();
   const navigate = useNavigate();
   const [showCreateBrandDialog, setShowCreateBrandDialog] = useState(false);
   const [requestedNav, setRequestedNav] = useState<string | null>(null);
   const flags = useSyncExternalStore(subscribeFeatureFlags, getFeatureFlagsSnapshot, getFeatureFlagsSnapshot);
   const intelligenceEnabled = Boolean(flags.flags.intelligenceWorkspace);
   const collapsed = state === 'collapsed';
+
+  // Sidebar access should be gated by whether the authenticated user is linked to a brand,
+  // NOT whether company settings exist on the server.
+  const authBrandId = String((user as any)?.brand_id ?? (brand as any)?.id ?? '');
+  const hasBrand = Boolean(authBrandId);
 
   const isActive = (path: string) => {
     if (path === '/app') return location.pathname === '/app' || location.pathname === '/app/';
@@ -110,7 +115,7 @@ export function AppSidebar() {
 
   const NavItem = ({ item }: { item: NavItemType }) => {
     if (!hasPermission(item.permission)) return null;
-    const disabled = !brandExists;
+    const disabled = !hasBrand;
     
     return (
       <SidebarMenuItem>
@@ -304,9 +309,9 @@ export function AppSidebar() {
           <SidebarMenuItem>
               <SidebarMenuButton asChild isActive={isActive('/app/settings')}>
               <NavLink
-                to={brandExists ? '/app/settings' : '#'}
+                to={hasBrand ? '/app/settings' : '#'}
                 onClick={(e) => {
-                  if (!brandExists) {
+                  if (!hasBrand) {
                     e.preventDefault();
                     navigate('/app/company-settings');
                   }
@@ -316,7 +321,7 @@ export function AppSidebar() {
                   isActive('/app/settings')
                     ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
                     : "text-sidebar-foreground hover:bg-sidebar-accent/50",
-                  !brandExists && 'opacity-60'
+                  !hasBrand && 'opacity-60'
                 )}
               >
                 <Settings className="h-4 w-4 shrink-0" />

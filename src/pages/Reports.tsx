@@ -4,14 +4,14 @@ import { PageHeader } from '@/components/common/PageComponents';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
 const reports = [
-  { title: 'Management Overview', description: 'Daily summary with KPIs, profit, and activity', icon: BarChart3, path: '/' },
-  { title: 'ZRA Tax Season', description: 'One-click export of sales + VAT for ZRA portal', icon: FileText, path: '/zra-tax-season' },
-  { title: 'Purchases (GRV)', description: 'Goods received vouchers, costs, and supplier receipts', icon: ShoppingCart, path: '/purchases' },
-  { title: 'Stock on Hand', description: 'Current inventory levels by department', icon: Package, path: '/inventory/items' },
-  { title: 'Stock Issues Report', description: 'Internal transfer history', icon: ArrowRightLeft, path: '/inventory/issues' },
-  { title: 'Stock Variance Report', description: 'Physical vs system count analysis', icon: TrendingUp, path: '/inventory/stock-take' },
-  { title: 'Manufacturing Report', description: 'Batch production and yield analysis', icon: Factory, path: '/manufacturing/production' },
-  { title: 'Staff Cashup Report', description: 'Staff sales and reconciliation', icon: Users, path: '/staff' },
+  { title: 'Management Overview', description: 'Daily summary with KPIs, profit, and activity', icon: BarChart3, path: '/app' },
+  { title: 'ZRA Tax Season', description: 'One-click export of sales + VAT for ZRA portal', icon: FileText, path: '/app/zra-tax-season' },
+  { title: 'Purchases (GRV)', description: 'Goods received vouchers, costs, and supplier receipts', icon: ShoppingCart, path: '/app/purchases' },
+  { title: 'Stock on Hand', description: 'Current inventory levels by department', icon: Package, path: '/app/inventory/items' },
+  { title: 'Stock Issues Report', description: 'Internal transfer history', icon: ArrowRightLeft, path: '/app/inventory/stock-issues' },
+  { title: 'Stock Variance Report', description: 'Physical vs system count analysis', icon: TrendingUp, path: '/app/inventory/stock-take' },
+  { title: 'Manufacturing Report', description: 'Batch production and yield analysis', icon: Factory, path: '/app/manufacturing/production' },
+  { title: 'Staff Cashup Report', description: 'Staff sales and reconciliation', icon: Users, path: '/app/staff' },
 ];
 
 export default function Reports() {

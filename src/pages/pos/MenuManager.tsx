@@ -24,6 +24,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '
 import { cn } from '@/lib/utils';
 import React from "react";
 import { deleteItem } from "@/lib/crudDelete";
+import { getCategoriesSnapshot, refreshCategories, subscribeCategories } from '@/lib/categoriesStore';
 
 interface MenuItem {
   id: string;
@@ -43,7 +44,8 @@ export const MenuManager: React.FC = () => {
   const [recipes, setRecipes] = useState<{ id: string; parentItemName: string; parentItemCode: string }[]>([]);
   const stockItems = useSyncExternalStore(subscribeStockItems, getStockItemsSnapshot);
   const [recipeEditorOpen, setRecipeEditorOpen] = useState(false);
-  const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
+  const categoriesSnap = useSyncExternalStore(subscribeCategories, getCategoriesSnapshot, getCategoriesSnapshot);
+  const categories = categoriesSnap.categories;
   const [uploading, setUploading] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | undefined>(undefined);
   const [isRetail, setIsRetail] = useState(false);
@@ -136,41 +138,9 @@ export const MenuManager: React.FC = () => {
     }
   }, [form.image]);
 
-  // Load departments (used as "Category" in the UI) from Supabase or fallback to empty
   useEffect(() => {
-    let mounted = true;
-    const load = async () => {
-      try {
-        if (isSupabaseConfigured() && supabase) {
-          // Departments are equivalent to categories in this project.
-          // Prefer loading `departments` so selected ids match `products.category_id`.
-          try {
-            const { data } = await supabase.from('departments').select('id,name').order('name', { ascending: true });
-            if (!mounted) return;
-            if (Array.isArray(data) && data.length) {
-              setCategories((data as any).map((d: any) => ({ id: String(d.id), name: String(d.name) })));
-              return;
-            }
-          } catch {
-            // fall back to public `categories`
-          }
-
-          try {
-            const { data } = await supabase.from('categories').select('id,name').order('name', { ascending: true });
-            if (!mounted) return;
-            if (Array.isArray(data)) setCategories((data as any).map((d: any) => ({ id: String(d.id), name: String(d.name) })));
-          } catch {
-            setCategories([]);
-          }
-        } else {
-          setCategories([]);
-        }
-      } catch {
-        if (mounted) setCategories([]);
-      }
-    };
-    void load();
-    return () => { mounted = false; };
+    // Best-effort refresh of categories when entering.
+    void refreshCategories().catch(() => {});
   }, []);
 
   const handleSave = async () => {

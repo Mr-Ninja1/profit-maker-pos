@@ -80,6 +80,7 @@ const App = () => {
               <Routes>
                 <Route path="/" element={<Landing />} />
                 <Route path="/login" element={<Navigate to="/" replace />} />
+                <Route path="/company-settings" element={<Navigate to="/app/company-settings" replace />} />
                 <Route path="/auth/callback" element={<AuthCallback />} />
 
                 <Route path="/app" element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>

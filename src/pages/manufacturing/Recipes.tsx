@@ -11,12 +11,12 @@ import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '@/components/ui/command';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { supabase, isSupabaseConfigured } from '@/lib/supabaseClient';
 import type { DepartmentId, Recipe, RecipeIngredient, StockItem, UnitType } from '@/types';
 import { getManufacturingRecipesSnapshot, subscribeManufacturingRecipes, upsertManufacturingRecipe, deleteManufacturingRecipe, ensureRecipesLoaded } from '@/lib/manufacturingRecipeStore';
 import { getStockItemsSnapshot, subscribeStockItems } from '@/lib/stockStore';
 import { getPosMenuItemsSnapshot, subscribePosMenu } from '@/lib/posMenuStore';
 import { cn } from '@/lib/utils';
+import { getCategoriesSnapshot, refreshCategories, subscribeCategories } from '@/lib/categoriesStore';
 
 const mapUnitTypeToUnit = (u?: UnitType): string => {
   switch (u) {
@@ -248,7 +248,8 @@ export function RecipeEditorDialog(props: {
 
   const posMenuItems = useSyncExternalStore(subscribePosMenu, getPosMenuItemsSnapshot, getPosMenuItemsSnapshot);
 
-  const [departmentsList, setDepartmentsList] = useState<{ id: string; name: string }[]>([]);
+  const categoriesSnap = useSyncExternalStore(subscribeCategories, getCategoriesSnapshot, getCategoriesSnapshot);
+  const departmentsList = categoriesSnap.categories;
 
   const [name, setName] = useState(editing?.parentItemName ?? '');
   const [code, setCode] = useState(editing?.parentItemCode ?? '');
@@ -299,26 +300,11 @@ export function RecipeEditorDialog(props: {
     return posMenuItems.filter(p => String(p.code ?? '').toLowerCase().includes(q) || (p.name ?? '').toLowerCase().includes(q)).slice(0, 10);
   }, [code, posMenuItems]);
 
-  // Load departments from Supabase or fallback to seeded data
   useEffect(() => {
-    let mounted = true;
-    const load = async () => {
-      try {
-        if (isSupabaseConfigured() && supabase) {
-          const { data } = await supabase.from('departments').select('id,name').order('name', { ascending: true });
-          if (!mounted) return;
-          if (Array.isArray(data)) setDepartmentsList(data as any);
-        } else {
-          // fallback to empty list — Settings page manages seeded fallback and editing should still work
-          setDepartmentsList([]);
-        }
-      } catch {
-        // ignore and leave as empty
-      }
-    };
-    void load();
-    return () => { mounted = false; };
-  }, []);
+    // Best-effort refresh when opening editor.
+    if (!open) return;
+    void refreshCategories().catch(() => {});
+  }, [open]);
 
   const matchedItem = useMemo(() => {
     const c = code.trim();

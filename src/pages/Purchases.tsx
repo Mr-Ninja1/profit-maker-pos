@@ -6,6 +6,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { toast } from '@/components/ui/use-toast';
 import {
   Select,
   SelectContent,
@@ -35,21 +36,21 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import type { GRV, GRVItem } from '@/types';
-import { suppliers } from '@/data/mockData';
 import { useAuth } from '@/contexts/AuthContext';
 import { getStockItemsSnapshot, subscribeStockItems } from '@/lib/stockStore';
+import { getSuppliersSnapshot, refreshSuppliers, subscribeSuppliers } from '@/lib/suppliersStore';
 import {
   cancelGRV,
   confirmGRV,
   createDraftGRV,
   deleteGRV,
-  getDefaultPurchaseContext,
   getGRVsSnapshot,
   makeGRVItemFromStockItem,
   recomputeLine,
+  refreshGRVs,
   subscribeGRVs,
   updateGRV,
-} from '@/lib/grvStore';
+} from '@/lib/grvDbStore';
 
 function statusToBadge(status: GRV['status']) {
   if (status === 'confirmed') return { tone: 'positive' as const, label: 'confirmed' };
@@ -69,11 +70,26 @@ function computeTotals(items: GRVItem[], applyVat: boolean, vatRate: number) {
 }
 
 export default function Purchases() {
-  const { user, hasPermission } = useAuth();
+  const { user, brand, accountUser, hasPermission } = useAuth();
   const canCreate = hasPermission('createGRV');
   const canConfirm = hasPermission('confirmGRV');
 
   const grvs = useSyncExternalStore(subscribeGRVs, getGRVsSnapshot);
+
+  const brandId = (user?.brand_id ?? brand?.id ?? '') as string;
+
+  useEffect(() => {
+    if (!accountUser) return;
+    if (!brandId) return;
+    void refreshGRVs(brandId).catch((e) => {
+      console.error('Failed to load GRVs', e);
+      toast({
+        title: 'Could not load GRVs',
+        description: (e as any)?.message ?? 'Please try again.',
+        variant: 'destructive',
+      });
+    });
+  }, [accountUser, brandId]);
 
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | GRV['status']>('all');
@@ -219,6 +235,7 @@ export default function Purchases() {
         onOpenChange={setDialogOpen}
         active={activeId ? grvs.find(g => g.id === activeId) ?? null : null}
         currentUserName={user?.name ?? 'System'}
+        brandId={brandId}
       />
 
       <AlertDialog open={!!confirmId} onOpenChange={open => !open && setConfirmId(null)}>
@@ -233,8 +250,17 @@ export default function Purchases() {
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
-                if (confirmId) confirmGRV(confirmId);
-                setConfirmId(null);
+                if (!confirmId) return;
+                void confirmGRV(confirmId)
+                  .then(() => toast({ title: 'GRV confirmed' }))
+                  .catch((e) =>
+                    toast({
+                      title: 'Confirm failed',
+                      description: (e as any)?.message ?? 'Please try again.',
+                      variant: 'destructive',
+                    })
+                  )
+                  .finally(() => setConfirmId(null));
               }}
             >
               Confirm
@@ -256,8 +282,17 @@ export default function Purchases() {
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => {
-                if (deleteId) deleteGRV(deleteId);
-                setDeleteId(null);
+                if (!deleteId) return;
+                void deleteGRV(deleteId)
+                  .then(() => toast({ title: 'GRV deleted' }))
+                  .catch((e) =>
+                    toast({
+                      title: 'Delete failed',
+                      description: (e as any)?.message ?? 'Please try again.',
+                      variant: 'destructive',
+                    })
+                  )
+                  .finally(() => setDeleteId(null));
               }}
             >
               Delete
@@ -274,19 +309,20 @@ function GRVDialog({
   onOpenChange,
   active,
   currentUserName,
+  brandId,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   active: GRV | null;
   currentUserName: string;
+  brandId: string;
 }) {
   const defaults = useMemo(() => {
-    const d = getDefaultPurchaseContext();
     return {
-      supplierId: d.supplierId,
-      supplierName: d.supplierName,
-      paymentType: d.paymentType,
-      receivedBy: currentUserName || d.receivedBy,
+      supplierId: '',
+      supplierName: '',
+      paymentType: 'account' as const,
+      receivedBy: currentUserName || 'System',
     };
   }, [currentUserName]);
 
@@ -303,6 +339,10 @@ function GRVDialog({
   const [itemQuery, setItemQuery] = useState('');
 
   const stockItems = useSyncExternalStore(subscribeStockItems, getStockItemsSnapshot);
+
+  const stockById = useMemo(() => {
+    return new Map(stockItems.map((s) => [String(s.id), s] as const));
+  }, [stockItems]);
 
   const locked = active ? active.status !== 'pending' : false;
 
@@ -331,16 +371,26 @@ function GRVDialog({
     setItemQuery('');
   }, [open, active, defaults, currentUserName]);
 
-  const supplierOptions = useMemo(
-    () => suppliers.map(s => ({ id: s.id, name: s.name, code: s.code })),
-    [],
-  );
+  const suppliersSnap = useSyncExternalStore(subscribeSuppliers, getSuppliersSnapshot, getSuppliersSnapshot);
+
+  useEffect(() => {
+    if (!open) return;
+    void refreshSuppliers().catch(() => {});
+  }, [open]);
+
+  const supplierOptions = useMemo(() => {
+    return (suppliersSnap.suppliers ?? []).map((s) => ({
+      id: String(s.id),
+      name: String(s.name),
+      code: s.code ? String(s.code) : undefined,
+    }));
+  }, [suppliersSnap.suppliers]);
 
   const filteredStockItems = useMemo(() => {
     const q = itemQuery.trim().toLowerCase();
     if (!q) return stockItems;
     return stockItems.filter(s => `${s.code} ${s.name}`.toLowerCase().includes(q));
-  }, [itemQuery]);
+  }, [itemQuery, stockItems]);
 
   const totals = useMemo(() => computeTotals(items, applyVat, vatRate), [items, applyVat, vatRate]);
 
@@ -363,7 +413,8 @@ function GRVDialog({
     setItems(prev => prev.filter(p => p.id !== id));
   };
 
-  const canSave = !locked && supplierId && date && items.length > 0;
+  const hasSupplier = Boolean(supplierId) || Boolean(supplierName.trim());
+  const canSave = !locked && hasSupplier && date && items.length > 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -387,6 +438,12 @@ function GRVDialog({
               <Select
                 value={supplierId}
                 onValueChange={v => {
+                  if (v === '__custom__') {
+                    setSupplierId('');
+                    if (!supplierName || supplierName === 'Supplier') setSupplierName('');
+                    return;
+                  }
+
                   setSupplierId(v);
                   const found = supplierOptions.find(s => s.id === v);
                   setSupplierName(found?.name ?? supplierName);
@@ -397,13 +454,26 @@ function GRVDialog({
                   <SelectValue placeholder="Select supplier" />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="__custom__">Custom supplier…</SelectItem>
                   {supplierOptions.map(s => (
                     <SelectItem key={s.id} value={s.id}>
-                      {s.name} ({s.code})
+                      {s.code ? `${s.name} (${s.code})` : s.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+
+              <div className="mt-2">
+                <Input
+                  value={supplierName}
+                  onChange={(e) => {
+                    setSupplierName(e.target.value);
+                    if (e.target.value.trim()) setSupplierId('');
+                  }}
+                  placeholder="Or type supplier name"
+                  disabled={locked}
+                />
+              </div>
             </div>
 
             <div className="space-y-2 md:col-span-1">
@@ -501,7 +571,10 @@ function GRVDialog({
                     <TableRow key={i.id}>
                       <TableCell>
                         <div className="font-medium">{i.itemName}</div>
-                        <div className="text-xs text-muted-foreground font-mono">{i.itemCode}</div>
+                        <div className="text-xs text-muted-foreground font-mono">
+                          {i.itemCode}
+                          {stockById.get(i.itemId)?.unitType ? ` • ${stockById.get(i.itemId)!.unitType}` : ''}
+                        </div>
                       </TableCell>
                       <TableCell className="text-right">
                         <Input
@@ -512,6 +585,9 @@ function GRVDialog({
                           onChange={e => updateLine(i.id, { quantity: Number(e.target.value) })}
                           disabled={locked}
                         />
+                        <div className="text-[11px] text-muted-foreground mt-1">
+                          Qty in {stockById.get(i.itemId)?.unitType ?? 'item unit'}
+                        </div>
                       </TableCell>
                       <TableCell className="text-right">
                         <Input
@@ -579,8 +655,16 @@ function GRVDialog({
             <Button
               variant="outline"
               onClick={() => {
-                cancelGRV(active.id);
-                onOpenChange(false);
+                void cancelGRV(active.id)
+                  .then(() => toast({ title: 'GRV cancelled' }))
+                  .catch((e) =>
+                    toast({
+                      title: 'Cancel failed',
+                      description: (e as any)?.message ?? 'Please try again.',
+                      variant: 'destructive',
+                    })
+                  )
+                  .finally(() => onOpenChange(false));
               }}
             >
               Cancel GRV
@@ -594,18 +678,15 @@ function GRVDialog({
             disabled={!canSave}
             onClick={() => {
               const safeItems = items.map(recomputeLine);
+
+              if (!brandId) {
+                toast({ title: 'No brand selected', variant: 'destructive' });
+                return;
+              }
+
               if (active) {
-                updateGRV(active.id, {
-                  date,
-                  supplierId,
-                  supplierName,
-                  paymentType,
-                  receivedBy,
-                  items: safeItems,
-                  ...computeTotals(safeItems, applyVat, vatRate),
-                });
-              } else {
-                createDraftGRV({
+                void updateGRV(active.id, {
+                  brandId,
                   date,
                   supplierId,
                   supplierName,
@@ -614,9 +695,39 @@ function GRVDialog({
                   items: safeItems,
                   applyVat,
                   vatRate,
-                });
+                })
+                  .then(() => toast({ title: 'GRV saved' }))
+                  .catch((e) =>
+                    toast({
+                      title: 'Save failed',
+                      description: (e as any)?.message ?? 'Please try again.',
+                      variant: 'destructive',
+                    })
+                  )
+                  .finally(() => onOpenChange(false));
+                return;
               }
-              onOpenChange(false);
+
+              void createDraftGRV({
+                brandId,
+                date,
+                supplierId,
+                supplierName,
+                paymentType,
+                receivedBy,
+                items: safeItems,
+                applyVat,
+                vatRate,
+              })
+                .then(() => toast({ title: 'Draft GRV created' }))
+                .catch((e) =>
+                  toast({
+                    title: 'Create failed',
+                    description: (e as any)?.message ?? 'Please try again.',
+                    variant: 'destructive',
+                  })
+                )
+                .finally(() => onOpenChange(false));
             }}
           >
             Save

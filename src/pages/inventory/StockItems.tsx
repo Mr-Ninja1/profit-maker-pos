@@ -38,12 +38,13 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
-import { departments as seededDepartments, suppliers as seededSuppliers } from '@/data/mockData';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase, isSupabaseConfigured } from '@/lib/supabaseClient';
 import { StockItem, DepartmentId, UnitType } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
 import { subscribeStockItems, getStockItemsSnapshot } from '@/lib/stockStore';
+import { getCategoriesSnapshot, refreshCategories, subscribeCategories } from '@/lib/categoriesStore';
+import { getSuppliersSnapshot, refreshSuppliers, subscribeSuppliers } from '@/lib/suppliersStore';
 export default function StockItems() {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [editForm, setEditForm] = useState<any>(null);
@@ -69,8 +70,10 @@ export default function StockItems() {
   });
   const [isSaving, setIsSaving] = useState(false);
 
-  const [departmentsList, setDepartmentsList] = useState<{ id: string; name: string }[]>([]);
-  const [suppliersList, setSuppliersList] = useState<{ id: string; name: string; code?: string }[]>([]);
+  const categoriesSnap = useSyncExternalStore(subscribeCategories, getCategoriesSnapshot, getCategoriesSnapshot);
+  const suppliersSnap = useSyncExternalStore(subscribeSuppliers, getSuppliersSnapshot, getSuppliersSnapshot);
+  const departmentsList = categoriesSnap.categories;
+  const suppliersList = suppliersSnap.suppliers;
 
   const suppliersById = useMemo(() => {
     return new Map((suppliersList ?? []).map((s) => [String(s.id), s] as const));
@@ -90,31 +93,10 @@ export default function StockItems() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Load departments and suppliers from Supabase (or fallback to seeded data)
+  // Best-effort refresh of reference data on entry.
   useEffect(() => {
-    let mounted = true;
-    const load = async () => {
-      if (isSupabaseConfigured() && supabase) {
-        try {
-          const [{ data: depts }, { data: sups }] = await Promise.all([
-            supabase.from('departments').select('id,name').order('name', { ascending: true }),
-            supabase.from('suppliers').select('id,name,code').order('name', { ascending: true }),
-          ]);
-          if (!mounted) return;
-          if (Array.isArray(depts)) setDepartmentsList(depts as any);
-          if (Array.isArray(sups)) setSuppliersList(sups as any);
-        } catch (err) {
-          // fallback to seeded
-          setDepartmentsList(seededDepartments);
-          setSuppliersList(seededSuppliers as any);
-        }
-      } else {
-        setDepartmentsList(seededDepartments);
-        setSuppliersList(seededSuppliers as any);
-      }
-    };
-    void load();
-    return () => { mounted = false; };
+    void refreshCategories().catch(() => {});
+    void refreshSuppliers().catch(() => {});
   }, []);
 
   // Keep URL in sync (debounced) so you can share/bookmark filtered views

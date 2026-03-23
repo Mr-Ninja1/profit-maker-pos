@@ -147,8 +147,8 @@ export default function BatchProduction() {
                       <TableRow key={i.id}>
                         <TableCell>{i.ingredientName}</TableCell>
                         <TableCell className="text-right">{i.requiredQty} {i.unitType}</TableCell>
-                        <TableCell className="text-right"><NumericCell value={i.unitCost} prefix="K " /></TableCell>
-                        <TableCell className="text-right"><NumericCell value={i.requiredQty * i.unitCost} prefix="K " /></TableCell>
+                        <TableCell className="text-right"><NumericCell value={i.unitCost} money /></TableCell>
+                        <TableCell className="text-right"><NumericCell value={i.requiredQty * i.unitCost} money /></TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
