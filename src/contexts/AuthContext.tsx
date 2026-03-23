@@ -36,7 +36,6 @@ type StaffSession = {
   v: 1;
   staff: BrandStaffUser;
   brand: any;
-  sessionToken: string;
   cachedAt: number;
 };
 
@@ -48,7 +47,6 @@ function loadStaffSession(): StaffSession | null {
     if (parsed.v !== 1) return null;
     if (!parsed.staff || typeof (parsed.staff as any).id !== 'string') return null;
     if (!parsed.brand || typeof (parsed.brand as any).id !== 'string') return null;
-    if (!parsed.sessionToken || typeof parsed.sessionToken !== 'string') return null;
     return parsed as StaffSession;
   } catch {
     return null;
@@ -104,7 +102,6 @@ interface AuthContextType {
   user: BrandStaffUser | null;
   accountUser: AccountUser | null;
   brand: any | null;
-  staffSessionToken: string | null;
   loading: boolean;
   profileReady: boolean;
   isAuthenticated: boolean;
@@ -131,7 +128,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [accountUser, setAccountUser] = useState<AccountUser | null>(null);
   const [user, setUser] = useState<BrandStaffUser | null>(null);
   const [brand, setBrand] = useState<any | null>(null);
-  const [staffSessionToken, setStaffSessionToken] = useState<string | null>(null);
   const [allUsers, setAllUsers] = useState<BrandStaffUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [profileReady, setProfileReady] = useState(false);
@@ -323,7 +319,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setAccountUser(null);
           setUser(restored.staff);
           setBrand(restored.brand);
-          setStaffSessionToken(restored.sessionToken);
           setLoading(false);
           setProfileReady(true);
           return;
@@ -333,7 +328,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(null);
         setAccountUser(null);
         setBrand(null);
-        setStaffSessionToken(null);
         setLoading(false);
         setProfileReady(true);
         return;
@@ -378,7 +372,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         hadSupabaseSessionRef.current = true;
         setActiveUserId(userId);
         setProfileReady(false);
-        setStaffSessionToken(null);
 
         const snap = loadAuthSnapshot(userId);
         if (snap?.user) {
@@ -407,7 +400,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(null);
         setAccountUser(null);
         setBrand(null);
-        setStaffSessionToken(null);
         setLoading(false);
         setProfileReady(true);
         setActiveUserId(null);
@@ -616,7 +608,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     try {
       const { data, error } = await withTimeout(
-        supabase.rpc('under_brand_staff_login_with_session', { p_email: cleanEmail, p_pin: cleanPin }),
+        supabase.rpc('under_brand_staff_login', { p_email: cleanEmail, p_pin: cleanPin }),
         15000
       );
 
@@ -632,11 +624,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           message:
             'Your details did not match any brand staff. Ensure the admin added you to a brand and that your account is active.',
         };
-      }
-
-      const sessionToken = String(row.session_token ?? '').trim();
-      if (!sessionToken) {
-        return { ok: false, message: 'Login succeeded but no session token was issued. Please try again.' };
       }
 
       // Fetch brand (public select policy)
@@ -662,11 +649,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setAccountUser(null);
       setUser(staffUser);
       setBrand(brandRow);
-      setStaffSessionToken(sessionToken);
       setLoading(false);
       setProfileReady(true);
 
-      saveStaffSession({ v: 1, staff: staffUser, brand: brandRow, sessionToken, cachedAt: Date.now() });
+      saveStaffSession({ v: 1, staff: staffUser, brand: brandRow, cachedAt: Date.now() });
 
       return { ok: true, role: staffUser.role };
     } catch (e: any) {
@@ -708,7 +694,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAccountUser(null);
     setBrand(null);
     setAllUsers([]);
-    setStaffSessionToken(null);
     clearStaffSession();
   };
 
@@ -812,7 +797,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user, 
       accountUser,
       brand, 
-      staffSessionToken,
       loading, 
       profileReady,
       isAuthenticated: !!user, 

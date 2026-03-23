@@ -27,172 +27,147 @@ import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from '@
 import { parseSmartQuantityQuery, smartSearchMenuItems } from '@/lib/smartMenuSearch';
 import { getPosPaymentRequestsSnapshot, resolvePosPaymentRequest, subscribePosPaymentRequests } from '@/lib/posPaymentRequestStore';
 import { ROLE_NAMES } from '@/types/auth';
-import { supabase } from '@/lib/supabaseClient';
 
-                {items.length <= 1 ? (
-                  <div className="mb-3 rounded-lg border bg-muted/30 p-3 text-sm">
-                    <div className="font-medium">Only {items.length} menu item found.</div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      Go to POS Menu to add items, or reset to defaults.
-                    </div>
-                    <div className="mt-2 flex gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => navigate('/pos/menu')}
-                      >
-                        Open POS Menu
-                      </Button>
-                    </div>
-                  </div>
-                ) : null}
+export default function POSTerminal() {
+  const auth = useAuth();
+  const { user, hasPermission, logout } = auth;
+  const { settings } = useBranding();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const menu = usePosMenu();
+  const categories = useMemo(() => menu.categories.slice().sort((a, b) => a.sortOrder - b.sortOrder), [menu.categories]);
+  const items = useMemo(() => menu.items.slice(), [menu.items]);
+  const orders = useSyncExternalStore(subscribeOrders, getOrdersSnapshot);
 
-                <Dialog
-                  open={showStartShift}
-                  onOpenChange={(open) => {
-                    if (!open) {
-                      setConfirmStartShift(false);
-                      setShiftError(null);
-                    }
-                    setShowStartShift(open);
-                  }}
-                >
-                  <DialogContent className="max-w-md">
-                    <DialogHeader>
-                      <DialogTitle>Start Shift</DialogTitle>
-                    </DialogHeader>
-                    <div className="space-y-3">
-                      <div className="text-sm text-muted-foreground">
-                        Enter the starting cash found in the register.
-                      </div>
-                      <Input
-                        type="number"
-                        value={openingCash}
-                        onChange={(e) => setOpeningCash(e.target.value)}
-                        disabled={shiftBusy}
-                      />
-                      {shiftError ? (
-                        <div className="text-sm text-destructive">{shiftError}</div>
-                      ) : null}
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          type="button"
-                          onClick={() => {
-                            const amt = Math.max(0, Number(openingCash) || 0);
-                            setOpeningCash(String(amt));
-                            setConfirmStartShift(true);
-                          }}
-                          disabled={shiftBusy}
-                        >
-                          Start Shift
-                        </Button>
-                      </div>
-                    </div>
-                  </DialogContent>
-                </Dialog>
+  const ALL_CATEGORY_ID = 'all';
+  const categoriesWithAll = useMemo(
+    () => [{ id: ALL_CATEGORY_ID, name: 'All', sortOrder: -999, color: 'bg-slate-500' }, ...categories],
+    [categories]
+  );
 
-                <AlertDialog open={confirmStartShift} onOpenChange={setConfirmStartShift}>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Confirm starting balance</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        Is K {Math.max(0, Number(openingCash) || 0).toFixed(2)} the correct starting balance?
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel disabled={shiftBusy}>No</AlertDialogCancel>
-                      <AlertDialogAction
-                        disabled={shiftBusy}
-                        onClick={() => void startCashierShift(Math.max(0, Number(openingCash) || 0))}
-                      >
-                        Yes, start shift
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
+  const [selectedCategory, setSelectedCategory] = useState<string>(ALL_CATEGORY_ID);
+  const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
+  const [orderType, setOrderType] = useState<OrderType>('eat_in');
+  const [selectedTable, setSelectedTable] = useState<number | null>(null);
+  const [activeOrderId, setActiveOrderId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [showPayment, setShowPayment] = useState(false);
+  const [showTableSelect, setShowTableSelect] = useState(false);
+  const [showHeldOrders, setShowHeldOrders] = useState(false);
+  const [showPaymentRequests, setShowPaymentRequests] = useState(false);
 
-                <Dialog
-                  open={showEndShift}
-                  onOpenChange={(open) => {
-                    if (!open) {
-                      setConfirmEndShift(false);
-                      setShiftError(null);
-                    }
-                    setShowEndShift(open);
-                  }}
-                >
-                  <DialogContent className="max-w-md">
-                    <DialogHeader>
-                      <DialogTitle>End Shift</DialogTitle>
-                    </DialogHeader>
-                    <div className="space-y-3">
-                      <div className="text-sm text-muted-foreground">
-                        Enter the closing cash balance, then end shift and logout.
-                      </div>
-                      <Input
-                        type="number"
-                        value={closingCash}
-                        onChange={(e) => setClosingCash(e.target.value)}
-                        disabled={shiftBusy}
-                      />
-                      {shiftError ? (
-                        <div className="text-sm text-destructive">{shiftError}</div>
-                      ) : null}
-                      <div className="flex items-center justify-end gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={() => {
-                            void (async () => {
-                              await logout();
-                              navigate('/');
-                            })();
-                          }}
-                          disabled={shiftBusy}
-                        >
-                          Logout only
-                        </Button>
-                        <Button
-                          type="button"
-                          onClick={() => {
-                            const amt = Math.max(0, Number(closingCash) || 0);
-                            setClosingCash(String(amt));
-                            setConfirmEndShift(true);
-                          }}
-                          disabled={shiftBusy}
-                        >
-                          End shift + Logout
-                        </Button>
-                      </div>
-                    </div>
-                  </DialogContent>
-                </Dialog>
+  const [showAdminGate, setShowAdminGate] = useState(false);
+  const [adminEmail, setAdminEmail] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
+  const [adminBusy, setAdminBusy] = useState(false);
+  const [adminError, setAdminError] = useState<string | null>(null);
 
-                <AlertDialog open={confirmEndShift} onOpenChange={setConfirmEndShift}>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Confirm closing balance</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        Is K {Math.max(0, Number(closingCash) || 0).toFixed(2)} the correct closing balance?
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel disabled={shiftBusy}>No</AlertDialogCancel>
-                      <AlertDialogAction
-                        disabled={shiftBusy}
-                        onClick={() => {
-                          void (async () => {
-                            await endCashierShift(Math.max(0, Number(closingCash) || 0));
-                            await logout();
-                            navigate('/');
-                          })();
-                        }}
-                      >
-                        Yes, end shift
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
+  const [isOnline, setIsOnline] = useState(() => (typeof navigator !== 'undefined' ? navigator.onLine : true));
+
+  const [selectedOrderItemId, setSelectedOrderItemId] = useState<string | null>(null);
+  const [receiptOrder, setReceiptOrder] = useState<Order | null>(null);
+  const [showReceipt, setShowReceipt] = useState(false);
+
+  const [orderDiscountPercent, setOrderDiscountPercent] = useState(0);
+  const [couponCode, setCouponCode] = useState('');
+  const [showCoupon, setShowCoupon] = useState(false);
+
+  const paymentRequests = useSyncExternalStore(subscribePosPaymentRequests, getPosPaymentRequestsSnapshot);
+  const prevRequestIds = useRef<string>('');
+
+  const computeLineTotal = (unitPrice: number, qty: number, discountPercent?: number) => {
+    const d = Math.min(100, Math.max(0, discountPercent ?? 0));
+    const effective = unitPrice * (1 - d / 100);
+    return effective * qty;
+  };
+
+  const [recipeError, setRecipeError] = useState<string | null>(null);
+  const [recipeErrorDetail, setRecipeErrorDetail] = useState<string | null>(null);
+  const [showRecipeError, setShowRecipeError] = useState(false);
+
+  useEffect(() => {
+    const on = () => setIsOnline(true);
+    const off = () => setIsOnline(false);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    return () => {
+      window.removeEventListener('online', on);
+      window.removeEventListener('offline', off);
+    };
+  }, []);
+
+  useEffect(() => {
+    // Keep category selection valid as menu loads/changes.
+    const valid = categoriesWithAll.some((c) => c.id === selectedCategory);
+    if (!valid) setSelectedCategory(ALL_CATEGORY_ID);
+  }, [categoriesWithAll, selectedCategory]);
+
+  useEffect(() => {
+    // When navigated from Tables, preselect/resume.
+    const st = location.state as any;
+    if (!st) return;
+
+    if (typeof st.tableNo === 'number') {
+      setOrderType('eat_in');
+      setSelectedTable(st.tableNo);
+      const existing = findLatestActiveOrderForTable(st.tableNo);
+      if (existing) loadOrderToTerminal(existing);
+      return;
+    }
+
+    if (typeof st.orderId === 'string') {
+      const existing = findOrderById(st.orderId);
+      if (existing) loadOrderToTerminal(existing, { openPayment: Boolean(st.openPayment) });
+    }
+  }, [location.key, orders]);
+
+  useEffect(() => {
+    const ids = paymentRequests.map((r) => r.id).join('|');
+    prevRequestIds.current = ids;
+  }, [paymentRequests]);
+
+  const popularItems = useMemo(() => {
+    // Local "AI" suggestion: top-selling items from paid orders.
+    const counts = new Map<string, { item: POSMenuItem; qty: number }>();
+    const byId = new Map(items.map((i) => [i.id, i] as const));
+    for (const o of orders) {
+      if (o.status !== 'paid') continue;
+      for (const it of o.items) {
+        const mi = byId.get(it.menuItemId);
+        if (!mi) continue;
+        const prev = counts.get(mi.id);
+        const qty = Number.isFinite(it.quantity) ? it.quantity : 0;
+        counts.set(mi.id, { item: mi, qty: (prev?.qty ?? 0) + qty });
+      }
+    }
+    return Array.from(counts.values())
+      .sort((a, b) => b.qty - a.qty)
+      .slice(0, 10)
+      .map((x) => x.item);
+  }, [orders, items]);
+  
+  const smartMatches = useMemo(() => {
+    const { query } = parseSmartQuantityQuery(searchQuery);
+    return smartSearchMenuItems({ query, items: items.filter((i) => i.isAvailable), limit: 30 });
+  }, [items, searchQuery]);
+
+  const filteredItems = useMemo(() => {
+    if (searchQuery.trim()) {
+      return smartMatches;
+    }
+
+    const base = items.filter((i) => i.isAvailable);
+    if (selectedCategory === ALL_CATEGORY_ID) return base;
+    return base.filter((item) => item.categoryId === selectedCategory);
+  }, [items, selectedCategory, searchQuery, smartMatches]);
+
+  const addItemWithQty = (menuItem: POSMenuItem, qty: number) => {
+    const safeQty = Math.max(1, Math.floor(qty));
+    for (let i = 0; i < safeQty; i++) addItem(menuItem);
+  };
+  
+  const orderTotals = useMemo(() => {
     const itemCount = orderItems.reduce((sum, item) => sum + item.quantity, 0);
     const subtotal = orderItems.reduce((sum, item) => sum + item.total, 0);
     const totalCost = orderItems.reduce((sum, item) => sum + item.unitCost * item.quantity, 0);
@@ -574,92 +549,6 @@ import { supabase } from '@/lib/supabaseClient';
     }
   };
 
-  const isCashier = user?.role === 'cashier';
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!isCashier) {
-        setActiveShift(null);
-        setShiftChecked(true);
-        return;
-      }
-      if (!staffSessionToken || !supabase) {
-        setShiftChecked(true);
-        return;
-      }
-      if (shiftChecked) return;
-
-      try {
-        const { data, error } = await supabase.rpc('pos_shift_get_active', { p_session_token: staffSessionToken });
-        if (cancelled) return;
-        if (error) {
-          console.warn('pos_shift_get_active error', error);
-          setShiftChecked(true);
-          return;
-        }
-        const row = Array.isArray(data) ? data[0] : (data as any);
-        setActiveShift(row ?? null);
-        setShiftChecked(true);
-        if (!row) {
-          setOpeningCash('0');
-          setShiftError(null);
-          setShowStartShift(true);
-        }
-      } catch (e) {
-        if (cancelled) return;
-        setShiftChecked(true);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isCashier, shiftChecked, staffSessionToken]);
-
-  async function startCashierShift(opening: number) {
-    if (!staffSessionToken || !supabase) return;
-    setShiftBusy(true);
-    setShiftError(null);
-    try {
-      const { data, error } = await supabase.rpc('pos_shift_start', {
-        p_session_token: staffSessionToken,
-        p_opening_cash: Math.max(0, opening),
-      });
-      if (error) {
-        setShiftError(error.message ?? 'Could not start shift');
-        return;
-      }
-      const row = Array.isArray(data) ? data[0] : (data as any);
-      setActiveShift(row ?? null);
-      setShowStartShift(false);
-      setConfirmStartShift(false);
-    } finally {
-      setShiftBusy(false);
-    }
-  }
-
-  async function endCashierShift(closing: number) {
-    if (!staffSessionToken || !supabase) return;
-    setShiftBusy(true);
-    setShiftError(null);
-    try {
-      const { data, error } = await supabase.rpc('pos_shift_end_active', {
-        p_session_token: staffSessionToken,
-        p_closing_cash: Math.max(0, closing),
-      });
-      if (error) {
-        setShiftError(error.message ?? 'Could not end shift');
-        return;
-      }
-      setActiveShift(null);
-      setShowEndShift(false);
-      setConfirmEndShift(false);
-    } finally {
-      setShiftBusy(false);
-    }
-  }
-
   const isAdminOperator = user?.role === 'owner' || user?.role === 'manager';
 
   const openSettings = () => {
@@ -830,13 +719,6 @@ import { supabase } from '@/lib/supabaseClient';
                   title="Logout"
                   onClick={() => {
                     void (async () => {
-                      if (isCashier && activeShift && staffSessionToken) {
-                        setShiftError(null);
-                        setClosingCash('0');
-                        setShowEndShift(true);
-                        return;
-                      }
-
                       await logout();
                       navigate('/');
                     })();
@@ -998,147 +880,6 @@ import { supabase } from '@/lib/supabaseClient';
                       <Button size="sm" variant="outline" onClick={() => navigate('/pos/menu')}>Open POS Menu</Button>
                     </div>
                   </div>
-
-                  <Dialog open={showStartShift} onOpenChange={(open) => {
-                    if (!open) {
-                      setConfirmStartShift(false);
-                      setShiftError(null);
-                    }
-                    setShowStartShift(open);
-                  }}>
-                    <DialogContent className="max-w-md">
-                      <DialogHeader>
-                        <DialogTitle>Start Shift</DialogTitle>
-                      </DialogHeader>
-                      <div className="space-y-3">
-                        <div className="text-sm text-muted-foreground">
-                          Enter the starting cash found in the register.
-                        </div>
-                        <Input
-                          type="number"
-                          value={openingCash}
-                          onChange={(e) => setOpeningCash(e.target.value)}
-                          disabled={shiftBusy}
-                        />
-                        {shiftError ? (
-                          <div className="text-sm text-destructive">{shiftError}</div>
-                        ) : null}
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            type="button"
-                            onClick={() => {
-                              const amt = Math.max(0, Number(openingCash) || 0);
-                              setOpeningCash(String(amt));
-                              setConfirmStartShift(true);
-                            }}
-                            disabled={shiftBusy}
-                          >
-                            Start Shift
-                          </Button>
-                        </div>
-                      </div>
-                    </DialogContent>
-                  </Dialog>
-
-                  <AlertDialog open={confirmStartShift} onOpenChange={setConfirmStartShift}>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Confirm starting balance</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          Is K {Math.max(0, Number(openingCash) || 0).toFixed(2)} the correct starting balance?
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel disabled={shiftBusy}>No</AlertDialogCancel>
-                        <AlertDialogAction
-                          disabled={shiftBusy}
-                          onClick={() => void startCashierShift(Math.max(0, Number(openingCash) || 0))}
-                        >
-                          Yes, start shift
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
-
-                  <Dialog open={showEndShift} onOpenChange={(open) => {
-                    if (!open) {
-                      setConfirmEndShift(false);
-                      setShiftError(null);
-                    }
-                    setShowEndShift(open);
-                  }}>
-                    <DialogContent className="max-w-md">
-                      <DialogHeader>
-                        <DialogTitle>End Shift</DialogTitle>
-                      </DialogHeader>
-                      <div className="space-y-3">
-                        <div className="text-sm text-muted-foreground">
-                          Enter the closing cash balance, then end shift and logout.
-                        </div>
-                        <Input
-                          type="number"
-                          value={closingCash}
-                          onChange={(e) => setClosingCash(e.target.value)}
-                          disabled={shiftBusy}
-                        />
-                        {shiftError ? (
-                          <div className="text-sm text-destructive">{shiftError}</div>
-                        ) : null}
-                        <div className="flex items-center justify-end gap-2">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() => {
-                              void (async () => {
-                                await logout();
-                                navigate('/');
-                              })();
-                            }}
-                            disabled={shiftBusy}
-                          >
-                            Logout only
-                          </Button>
-                          <Button
-                            type="button"
-                            onClick={() => {
-                              const amt = Math.max(0, Number(closingCash) || 0);
-                              setClosingCash(String(amt));
-                              setConfirmEndShift(true);
-                            }}
-                            disabled={shiftBusy}
-                          >
-                            End shift + Logout
-                          </Button>
-                        </div>
-                      </div>
-                    </DialogContent>
-                  </Dialog>
-
-                  <AlertDialog open={confirmEndShift} onOpenChange={setConfirmEndShift}>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Confirm closing balance</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          Is K {Math.max(0, Number(closingCash) || 0).toFixed(2)} the correct closing balance?
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel disabled={shiftBusy}>No</AlertDialogCancel>
-                        <AlertDialogAction
-                          disabled={shiftBusy}
-                          onClick={() => {
-                            void (async () => {
-                              await endCashierShift(Math.max(0, Number(closingCash) || 0));
-                              await logout();
-                              navigate('/');
-                            })();
-                          }}
-                        >
-                          Yes, end shift
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
                 )}
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3">
                   {filteredItems.map(item => (
