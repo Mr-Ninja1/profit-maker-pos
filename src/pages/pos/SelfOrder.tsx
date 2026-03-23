@@ -10,8 +10,10 @@ import { InsufficientStockError, RecipeIncompleteError } from '@/lib/recipeEngin
 import { getManufacturingRecipesSnapshot } from '@/lib/manufacturingRecipeStore';
 import { applyStockDeductions, getStockItemById } from '@/lib/stockStore';
 import { usePosMenu } from '@/hooks/usePosMenu';
+import { useCurrency } from '@/contexts/CurrencyContext';
 
 export default function SelfOrder() {
+  const { formatMoneyPrecise } = useCurrency();
   const menu = usePosMenu();
   const categories = useMemo(() => menu.categories.slice().sort((a, b) => a.sortOrder - b.sortOrder), [menu.categories]);
   const menuItems = useMemo(() => menu.items.slice(), [menu.items]);
@@ -165,7 +167,7 @@ export default function SelfOrder() {
         </div>
         <div className="flex items-center gap-2">
           <Badge variant="secondary">{totals.itemCount} items</Badge>
-          <Badge variant="default">K {totals.total.toFixed(0)}</Badge>
+          <Badge variant="default">{formatMoneyPrecise(totals.total, 0)}</Badge>
         </div>
       </div>
 
@@ -191,7 +193,7 @@ export default function SelfOrder() {
                       <span className="block font-medium text-sm">{i.name}</span>
                       <span className="block text-xs text-muted-foreground">{i.code}</span>
                     </span>
-                    <span className="font-bold">K {i.price}</span>
+                    <span className="font-bold">{formatMoneyPrecise(Number(i.price), 2)}</span>
                   </Button>
                 ))}
               </div>
@@ -214,16 +216,16 @@ export default function SelfOrder() {
                       <div className="font-medium truncate">{i.menuItemName}</div>
                       <div className="text-xs text-muted-foreground">x{i.quantity}</div>
                     </div>
-                    <div className="font-semibold">K {i.total.toFixed(0)}</div>
+                    <div className="font-semibold">{formatMoneyPrecise(i.total, 0)}</div>
                   </div>
                 ))}
               </div>
             )}
 
             <div className="pt-2 border-t text-sm space-y-1">
-              <div className="flex justify-between"><span>Subtotal</span><span>K {totals.subtotal.toFixed(2)}</span></div>
-              <div className="flex justify-between text-muted-foreground"><span>VAT</span><span>K {totals.tax.toFixed(2)}</span></div>
-              <div className="flex justify-between font-bold"><span>Total</span><span>K {totals.total.toFixed(2)}</span></div>
+              <div className="flex justify-between"><span>Subtotal</span><span>{formatMoneyPrecise(totals.subtotal, 2)}</span></div>
+              <div className="flex justify-between text-muted-foreground"><span>VAT</span><span>{formatMoneyPrecise(totals.tax, 2)}</span></div>
+              <div className="flex justify-between font-bold"><span>Total</span><span>{formatMoneyPrecise(totals.total, 2)}</span></div>
             </div>
 
             <Button className="w-full" disabled={!cart.length} onClick={submit}>Send to Kitchen</Button>

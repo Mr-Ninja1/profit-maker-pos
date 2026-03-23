@@ -14,9 +14,11 @@ import { cn } from '@/lib/utils';
 import { getOrdersSnapshot, subscribeOrders } from '@/lib/orderStore';
 import { computeSalesFromOrders, createCashUp, getCashUpsSnapshot, subscribeCashUps, type PayoutLine } from '@/lib/cashUpStore';
 import { getCurrentShiftSnapshot, startShift, subscribeCurrentShift, endShift } from '@/lib/shiftStore';
+import { useCurrency } from '@/contexts/CurrencyContext';
 
 export default function CashUp() {
   const { user, hasPermission } = useAuth();
+  const { formatMoneyPrecise } = useCurrency();
 
   const orders = useSyncExternalStore(subscribeOrders, getOrdersSnapshot);
   const shift = useSyncExternalStore(subscribeCurrentShift, getCurrentShiftSnapshot);
@@ -270,7 +272,7 @@ export default function CashUp() {
                 <div className="pt-4 border-t">
                   <div className="flex justify-between text-lg font-semibold">
                     <span>Total Sales</span>
-                    <span className="text-primary">K {totalSales.toFixed(2)}</span>
+                    <span className="text-primary">{formatMoneyPrecise(totalSales, 2)}</span>
                   </div>
                 </div>
               </CardContent>
@@ -341,7 +343,7 @@ export default function CashUp() {
                     </Table>
                   </div>
 
-                  <div className="mt-3 flex justify-end font-semibold">Total Payouts: K {totalPayouts.toFixed(2)}</div>
+                  <div className="mt-3 flex justify-end font-semibold">Total Payouts: {formatMoneyPrecise(totalPayouts, 2)}</div>
                 </Card>
 
                 <div className="grid grid-cols-2 gap-4">
@@ -368,19 +370,19 @@ export default function CashUp() {
                 <div className="space-y-2 pt-4 border-t">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Opening Cash</span>
-                    <span>K {opening.toFixed(2)}</span>
+                    <span>{formatMoneyPrecise(opening, 2)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">+ Cash Received</span>
-                    <span>K {cashReceived.toFixed(2)}</span>
+                    <span>{formatMoneyPrecise(cashReceived, 2)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">- Payouts</span>
-                    <span>K {totalPayouts.toFixed(2)}</span>
+                    <span>{formatMoneyPrecise(totalPayouts, 2)}</span>
                   </div>
                   <div className="flex justify-between font-semibold">
                     <span>= Expected Cash</span>
-                    <span>K {expectedCash.toFixed(2)}</span>
+                    <span>{formatMoneyPrecise(expectedCash, 2)}</span>
                   </div>
                 </div>
               </CardContent>
@@ -396,11 +398,11 @@ export default function CashUp() {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
                 <div className="text-center">
                   <p className="text-sm text-muted-foreground mb-1">Expected Cash</p>
-                  <p className="text-2xl font-bold">K {expectedCash.toFixed(2)}</p>
+                  <p className="text-2xl font-bold">{formatMoneyPrecise(expectedCash, 2)}</p>
                 </div>
                 <div className="text-center">
                   <p className="text-sm text-muted-foreground mb-1">Actual Cash</p>
-                  <p className="text-2xl font-bold">K {actual.toFixed(2)}</p>
+                  <p className="text-2xl font-bold">{formatMoneyPrecise(actual, 2)}</p>
                 </div>
                 <div className="text-center">
                   <p className="text-sm text-muted-foreground mb-1">
@@ -411,12 +413,12 @@ export default function CashUp() {
                     shortageOverage >= 0 ? 'text-green-600' : 'text-destructive'
                   )}>
                     {shortageOverage >= 0 ? <TrendingUp className="h-5 w-5" /> : <TrendingDown className="h-5 w-5" />}
-                    K {Math.abs(shortageOverage).toFixed(2)}
+                    {shortageOverage >= 0 ? '+' : '− '}{formatMoneyPrecise(Math.abs(shortageOverage), 2)}
                   </p>
                 </div>
                 <div className="text-center">
                   <p className="text-sm text-muted-foreground mb-1">Bankable Cash</p>
-                  <p className="text-2xl font-bold text-primary">K {bankableCash.toFixed(2)}</p>
+                  <p className="text-2xl font-bold text-primary">{formatMoneyPrecise(bankableCash, 2)}</p>
                   <p className="text-xs text-muted-foreground">(Actual - Tips)</p>
                 </div>
               </div>
@@ -465,14 +467,14 @@ export default function CashUp() {
                       <TableCell>{session.date}</TableCell>
                       <TableCell>{session.staffName}</TableCell>
                       <TableCell>{session.drnFrom} - {session.drnTo}</TableCell>
-                      <TableCell className="text-right">K {session.totalSales.toFixed(2)}</TableCell>
-                      <TableCell className="text-right">K {session.expectedCash.toFixed(2)}</TableCell>
-                      <TableCell className="text-right">K {session.actualCash.toFixed(2)}</TableCell>
+                        <TableCell className="text-right">{formatMoneyPrecise(session.totalSales, 2)}</TableCell>
+                        <TableCell className="text-right">{formatMoneyPrecise(session.expectedCash, 2)}</TableCell>
+                        <TableCell className="text-right">{formatMoneyPrecise(session.actualCash, 2)}</TableCell>
                       <TableCell className={cn(
                         'text-right font-medium',
                         session.shortageOverage >= 0 ? 'text-green-600' : 'text-destructive'
                       )}>
-                        {session.shortageOverage >= 0 ? '+' : ''}{session.shortageOverage.toFixed(2)}
+                          {session.shortageOverage >= 0 ? '+' : '− '}{formatMoneyPrecise(Math.abs(session.shortageOverage), 2)}
                       </TableCell>
                       <TableCell>
                         <Badge variant={session.status === 'approved' ? 'default' : 'secondary'}>

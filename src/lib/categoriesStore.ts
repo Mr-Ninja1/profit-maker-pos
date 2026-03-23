@@ -141,3 +141,51 @@ export async function addCategory(name: string) {
   persist();
   emit();
 }
+
+export async function updateCategory(id: string, patch: { name: string }) {
+  const categoryId = String(id);
+  const name = patch.name.trim();
+  if (!categoryId || !name) return;
+
+  // Local-only row or offline mode
+  if (!isSupabaseConfigured() || !supabase || categoryId.startsWith('local-')) {
+    snapshot = {
+      ...snapshot,
+      categories: snapshot.categories.map((c) => (c.id === categoryId ? { ...c, name } : c)),
+    };
+    persist();
+    emit();
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from('departments')
+    .update({ name })
+    .eq('id', categoryId)
+    .select('id,name')
+    .single();
+  if (error) throw error;
+
+  snapshot = {
+    ...snapshot,
+    categories: snapshot.categories.map((c) =>
+      c.id === categoryId ? { id: String((data as any).id), name: String((data as any).name ?? name) } : c
+    ),
+  };
+  persist();
+  emit();
+}
+
+export async function deleteCategory(id: string) {
+  const categoryId = String(id);
+  if (!categoryId) return;
+
+  if (isSupabaseConfigured() && supabase && !categoryId.startsWith('local-')) {
+    const { error } = await supabase.from('departments').delete().eq('id', categoryId);
+    if (error) throw error;
+  }
+
+  snapshot = { ...snapshot, categories: snapshot.categories.filter((c) => c.id !== categoryId) };
+  persist();
+  emit();
+}

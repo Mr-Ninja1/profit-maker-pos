@@ -25,7 +25,6 @@ export default function CompanySettings() {
   const [localPrimary, setLocalPrimary] = useState(settings.primaryColorHex);
   const [localLogo, setLocalLogo] = useState<string | undefined>(settings.logoDataUrl);
   const [localBrandType, setLocalBrandType] = useState<'restaurant' | 'retail'>(settings.brandType ?? 'restaurant');
-  const [localCurrencyCode, setLocalCurrencyCode] = useState((settings.currencyCode ?? 'ZMW').toUpperCase());
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -41,9 +40,8 @@ export default function CompanySettings() {
       primaryColorHex: localPrimary,
       logoDataUrl: localLogo,
       brandType: localBrandType,
-      currencyCode: (localCurrencyCode.trim().toUpperCase() || 'ZMW') as any,
     }),
-    [localName, localTagline, localPrimary, localLogo, localBrandType, localCurrencyCode]
+    [localName, localTagline, localPrimary, localLogo, localBrandType]
   );
 
   const apply = async () => {
@@ -185,20 +183,6 @@ export default function CompanySettings() {
               </div>
             </div>
 
-            <div className="space-y-1">
-              <div className="text-sm font-medium">Currency code</div>
-              <Input
-                value={localCurrencyCode}
-                onChange={(e) => setLocalCurrencyCode(e.target.value.toUpperCase())}
-                disabled={!canManage}
-                placeholder="ZMW"
-                maxLength={3}
-              />
-              <div className="text-xs text-muted-foreground">
-                ISO currency code used across the app (e.g. ZMW, USD, ZAR). This is saved per brand.
-              </div>
-            </div>
-
             <div className="flex items-center gap-3">
               <Button onClick={apply} disabled={!canManage || saving}>
                 {saving ? (
@@ -219,7 +203,6 @@ export default function CompanySettings() {
                   setLocalTagline('Back Office + POS');
                   setLocalPrimary('#2563eb');
                   setLocalLogo(undefined);
-                  setLocalCurrencyCode('ZMW');
                 }}
                 disabled={!canManage}
               >

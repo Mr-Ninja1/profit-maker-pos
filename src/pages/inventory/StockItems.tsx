@@ -762,19 +762,19 @@ export default function StockItems() {
                   </TableCell>
                   <TableCell className="text-xs">{item.unitType}</TableCell>
                   <TableCell className="text-right">
-                    <NumericCell value={item.lowestCost} prefix="K " />
+                    <NumericCell value={item.lowestCost} money />
                   </TableCell>
                   <TableCell className="text-right">
-                    <NumericCell value={item.highestCost} prefix="K " />
+                    <NumericCell value={item.highestCost} money />
                   </TableCell>
                   <TableCell className="text-right font-medium">
-                    <NumericCell value={item.currentCost} prefix="K " />
+                    <NumericCell value={item.currentCost} money />
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="font-medium">{formatStockLevel(item.currentStock, item.unitType)}</div>
                   </TableCell>
                   <TableCell className="text-right">
-                    <NumericCell value={stockValue} prefix="K " />
+                    <NumericCell value={stockValue} money />
                   </TableCell>
                   <TableCell>
                     <StatusBadge status={status.status}>{status.label}</StatusBadge>

@@ -158,3 +158,72 @@ export async function addSupplier(input: { name: string; code?: string }) {
   persist();
   emit();
 }
+
+export async function updateSupplier(id: string, patch: { name?: string; code?: string | null | undefined }) {
+  const supplierId = String(id);
+  const name = patch.name != null ? patch.name.trim() : undefined;
+  const code = patch.code != null ? String(patch.code).trim() : undefined;
+
+  if (!supplierId) return;
+
+  // Local-only row or offline mode
+  if (!isSupabaseConfigured() || !supabase || supplierId.startsWith('local-')) {
+    snapshot = {
+      ...snapshot,
+      suppliers: snapshot.suppliers.map((s) =>
+        s.id === supplierId
+          ? {
+              ...s,
+              ...(name != null ? { name } : {}),
+              ...(patch.code !== undefined ? { code: code || undefined } : {}),
+            }
+          : s
+      ),
+    };
+    persist();
+    emit();
+    return;
+  }
+
+  const updateRow: any = {};
+  if (name != null) updateRow.name = name;
+  if (patch.code !== undefined) updateRow.code = code || null;
+  if (Object.keys(updateRow).length === 0) return;
+
+  const { data, error } = await supabase
+    .from('suppliers')
+    .update(updateRow)
+    .eq('id', supplierId)
+    .select('id,name,code')
+    .single();
+  if (error) throw error;
+
+  snapshot = {
+    ...snapshot,
+    suppliers: snapshot.suppliers.map((s) =>
+      s.id === supplierId
+        ? {
+            id: String((data as any).id),
+            name: String((data as any).name ?? name ?? s.name),
+            code: (data as any).code ? String((data as any).code) : undefined,
+          }
+        : s
+    ),
+  };
+  persist();
+  emit();
+}
+
+export async function deleteSupplier(id: string) {
+  const supplierId = String(id);
+  if (!supplierId) return;
+
+  if (isSupabaseConfigured() && supabase && !supplierId.startsWith('local-')) {
+    const { error } = await supabase.from('suppliers').delete().eq('id', supplierId);
+    if (error) throw error;
+  }
+
+  snapshot = { ...snapshot, suppliers: snapshot.suppliers.filter((s) => s.id !== supplierId) };
+  persist();
+  emit();
+}

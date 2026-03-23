@@ -19,23 +19,10 @@ type CurrencyModel = {
 
 const CurrencyContext = createContext<CurrencyModel | null>(null);
 
-function formatZmwK(amount: number) {
+function formatZmwK(amount: number, decimals: number) {
   const n = Number.isFinite(amount) ? amount : 0;
-  return `K ${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-function formatCurrencyIntl(amount: number, currency: string) {
-  const n = Number.isFinite(amount) ? amount : 0;
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: 'currency',
-      currency,
-      currencyDisplay: 'narrowSymbol',
-      maximumFractionDigits: 2,
-    }).format(n);
-  } catch {
-    return `${currency} ${n.toFixed(2)}`;
-  }
+  const d = Number.isFinite(decimals) ? Math.max(0, Math.min(6, Math.floor(decimals))) : 2;
+  return `K ${n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })}`;
 }
 
 function currencySymbolFromCode(currency: string) {
@@ -56,6 +43,25 @@ function currencySymbolFromCode(currency: string) {
     return parts.find((p) => p.type === 'currency')?.value ?? c;
   } catch {
     return c;
+  }
+}
+
+function formatCurrencyIntl(amount: number, currency: string, decimals = 2) {
+  const n = Number.isFinite(amount) ? amount : 0;
+  const d = Number.isFinite(decimals) ? Math.max(0, Math.min(6, Math.floor(decimals))) : 2;
+  const c = String(currency || '').toUpperCase();
+  if (c === 'ZMW') return formatZmwK(n, d);
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency: c,
+      currencyDisplay: 'narrowSymbol',
+      minimumFractionDigits: d,
+      maximumFractionDigits: d,
+    }).format(n);
+  } catch {
+    const sym = currencySymbolFromCode(c);
+    return `${sym} ${n.toFixed(d)}`;
   }
 }
 
@@ -107,26 +113,10 @@ export function CurrencyProvider(props: { children: React.ReactNode }) {
         return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2, ...(opts ?? {}) }).format(n);
       },
       formatMoney: (amount) => {
-        if (currencyCode === 'ZMW') return formatZmwK(amount);
-        return formatCurrencyIntl(amount, currencyCode);
+        return formatCurrencyIntl(amount, currencyCode, 2);
       },
       formatMoneyPrecise: (amount, decimals) => {
-        const n = Number.isFinite(amount) ? amount : 0;
-        const d = Number.isFinite(decimals) ? Math.max(0, Math.min(6, Math.floor(decimals))) : 2;
-        if (currencyCode === 'ZMW') {
-          return `${currencySymbol} ${n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })}`;
-        }
-        try {
-          return new Intl.NumberFormat(undefined, {
-            style: 'currency',
-            currency: currencyCode,
-            currencyDisplay: 'narrowSymbol',
-            minimumFractionDigits: d,
-            maximumFractionDigits: d,
-          }).format(n);
-        } catch {
-          return `${currencySymbol} ${n.toFixed(d)}`;
-        }
+        return formatCurrencyIntl(amount, currencyCode, decimals);
       },
     };
   }, [receiptSettings, brand, brandId, overrideCode]);

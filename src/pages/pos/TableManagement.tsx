@@ -13,6 +13,7 @@ import { useNavigate } from 'react-router-dom';
 import { InteractiveFloorPlan, type FloorPlanTable } from '@/components/pos/InteractiveFloorPlan';
 import { getOrdersSnapshot, subscribeOrders } from '@/lib/orderStore';
 import { addPosPaymentRequest, getPosPaymentRequestsSnapshot, subscribePosPaymentRequests } from '@/lib/posPaymentRequestStore';
+import { useCurrency } from '@/contexts/CurrencyContext';
 
 const STATUS_COLORS: Record<TableStatus, string> = {
   available: 'bg-green-500/20 border-green-500 text-green-700 dark:text-green-400',
@@ -30,6 +31,7 @@ const STATUS_LABELS: Record<TableStatus, string> = {
 
 export default function TableManagement() {
   const navigate = useNavigate();
+  const { formatMoneyPrecise } = useCurrency();
   const [selectedTable, setSelectedTable] = useState<TableType | null>(null);
   const [showTableDialog, setShowTableDialog] = useState(false);
   const [viewMode, setViewMode] = useState<'floor' | 'grid'>('floor');
@@ -124,7 +126,7 @@ export default function TableManagement() {
               </div>
               <div className="flex items-center gap-1 text-sm font-semibold">
                 <DollarSign className="h-3 w-3" />
-                <span>K {order.total.toFixed(0)}</span>
+                <span>{formatMoneyPrecise(order.total, 0)}</span>
               </div>
               <p className="text-xs text-muted-foreground truncate">{order.staffName}</p>
             </div>
@@ -250,7 +252,7 @@ export default function TableManagement() {
             <div className="space-y-4">
               <div className="p-4 bg-muted rounded-lg">
                 <p className="text-sm text-muted-foreground">Current Order</p>
-                <p className="text-2xl font-bold">K {getTableOrder(selectedTable.id)!.total.toFixed(2)}</p>
+                <p className="text-2xl font-bold">{formatMoneyPrecise(getTableOrder(selectedTable.id)!.total, 2)}</p>
                 <p className="text-sm">{getTableOrder(selectedTable.id)!.items.length} items</p>
               </div>
               

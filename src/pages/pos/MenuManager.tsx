@@ -1,3 +1,4 @@
+import { useCurrency } from '@/contexts/CurrencyContext';
 import { useState, useEffect, useSyncExternalStore } from 'react';
 import { PageHeader } from '@/components/common/PageComponents';
 import { useNavigate } from 'react-router-dom';
@@ -37,6 +38,7 @@ interface MenuItem {
 }
 
 export const MenuManager: React.FC = () => {
+  const { formatMoneyPrecise } = useCurrency();
   const [items, setItems] = useState<MenuItem[]>([]);
   const [editing, setEditing] = useState<MenuItem | null>(null);
   const [showModal, setShowModal] = useState(false);
@@ -340,7 +342,7 @@ export const MenuManager: React.FC = () => {
                     <div className="h-36 w-36 bg-muted-foreground/10 rounded-md flex items-center justify-center text-sm text-muted-foreground">No image</div>
                   )}
                   <div className="flex-1 min-w-0">
-                    <div className="text-muted-foreground font-medium">Price: K {Number(item.price).toFixed(2)}</div>
+                    <div className="text-muted-foreground font-medium">Price: {formatMoneyPrecise(Number(item.price), 2)}</div>
                     {(item as any).description ? (
                       <div className="mt-2 text-sm text-muted-foreground break-words">{(item as any).description}</div>
                     ) : null}

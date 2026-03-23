@@ -7,6 +7,7 @@ import { subscribeStockItems, getStockItemsSnapshot } from '@/lib/stockStore';
 import { subscribeManufacturingRecipes, getManufacturingRecipesSnapshot } from '@/lib/manufacturingRecipeStore';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { useCurrency } from '@/contexts/CurrencyContext';
 
 type Props = {
   item: POSMenuItem;
@@ -15,6 +16,7 @@ type Props = {
 };
 
 export default function MenuItemCard({ item, onAdd, className }: Props) {
+  const { formatMoneyPrecise } = useCurrency();
   const [imgSrc, setImgSrc] = useState<string | undefined>(undefined);
   const stockItems = useSyncExternalStore(subscribeStockItems, getStockItemsSnapshot);
   const recipes = useSyncExternalStore(subscribeManufacturingRecipes, getManufacturingRecipesSnapshot);
@@ -155,7 +157,7 @@ export default function MenuItemCard({ item, onAdd, className }: Props) {
             <p className="text-sm font-semibold leading-snug text-white line-clamp-2">{item.name}</p>
             <div className="mt-2 flex items-end justify-between">
               <span className="text-[11px] text-white/80">{lowStock ? 'Low stock' : 'Tap to add'}</span>
-              <span className="text-sm font-bold text-white">K {item.price.toFixed(2)}</span>
+              <span className="text-sm font-bold text-white">{formatMoneyPrecise(item.price, 2)}</span>
             </div>
           </div>
         </div>

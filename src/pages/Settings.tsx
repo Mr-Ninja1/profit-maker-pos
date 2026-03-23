@@ -11,12 +11,18 @@ import { useAuth } from '@/contexts/AuthContext';
 import { NavLink } from 'react-router-dom';
 import { useBranding } from '@/contexts/BrandingContext';
 import { getFeatureFlagsSnapshot, setFeatureEnabled, subscribeFeatureFlags } from '@/lib/featureFlagsStore';
-import { addCategory, getCategoriesSnapshot, refreshCategories, subscribeCategories } from '@/lib/categoriesStore';
-import { addSupplier, getSuppliersSnapshot, refreshSuppliers, subscribeSuppliers } from '@/lib/suppliersStore';
+import { addCategory, deleteCategory, getCategoriesSnapshot, refreshCategories, subscribeCategories, updateCategory } from '@/lib/categoriesStore';
+import { addSupplier, deleteSupplier, getSuppliersSnapshot, refreshSuppliers, subscribeSuppliers, updateSupplier } from '@/lib/suppliersStore';
+import { useCurrency } from '@/contexts/CurrencyContext';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
+import { cn } from '@/lib/utils';
+import { Check, ChevronsUpDown } from 'lucide-react';
 
 export default function Settings() {
   const { hasPermission } = useAuth();
   const { settings, reset } = useBranding();
+  const { currencyCode, setCurrencyCode } = useCurrency();
   const flags = useSyncExternalStore(subscribeFeatureFlags, getFeatureFlagsSnapshot, getFeatureFlagsSnapshot);
   const intelligenceEnabled = Boolean(flags.flags.intelligenceWorkspace);
   const [receiptSettings, setReceiptSettings] = useState<ReceiptSettings>(() => getReceiptSettings());
@@ -39,6 +45,34 @@ export default function Settings() {
   const [newCategoryName, setNewCategoryName] = useState('');
   const [newSupplierName, setNewSupplierName] = useState('');
   const [newSupplierCode, setNewSupplierCode] = useState('');
+
+  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
+  const [editingCategoryName, setEditingCategoryName] = useState('');
+
+  const [editingSupplierId, setEditingSupplierId] = useState<string | null>(null);
+  const [editingSupplierName, setEditingSupplierName] = useState('');
+  const [editingSupplierCode, setEditingSupplierCode] = useState('');
+
+  const currencyOptions = useMemo(() => {
+    try {
+      // Supported in modern browsers; gives a big list.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const fn = (Intl as any)?.supportedValuesOf;
+      const list = typeof fn === 'function' ? (fn('currency') as string[]) : null;
+      if (Array.isArray(list) && list.length) return list;
+    } catch {
+      // ignore
+    }
+    return ['ZMW', 'USD', 'ZAR', 'EUR', 'GBP'];
+  }, []);
+
+  const [currencyDraft, setCurrencyDraft] = useState<string>(() => String(currencyCode ?? 'ZMW').toUpperCase());
+  const [currencyPickerOpen, setCurrencyPickerOpen] = useState(false);
+  const [currencySearch, setCurrencySearch] = useState('');
+
+  useEffect(() => {
+    setCurrencyDraft(String(currencyCode ?? 'ZMW').toUpperCase());
+  }, [currencyCode]);
 
   useEffect(() => {
     // Best-effort refresh when opening Settings.
@@ -216,13 +250,94 @@ export default function Settings() {
             <Button onClick={onAddCategory} disabled={!newCategoryName.trim() || !hasPermission('manageSettings')}>Add</Button>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
             {categoriesSnap.categories.length === 0 ? (
               <div className="text-sm text-muted-foreground">No categories defined.</div>
             ) : (
-              categoriesSnap.categories.map((cat) => (
-                <div key={cat.id} className="p-3 bg-muted rounded-md text-sm">{cat.name}</div>
-              ))
+              categoriesSnap.categories.map((cat) => {
+                const isEditing = editingCategoryId === cat.id;
+                return (
+                  <div key={cat.id} className="p-3 bg-muted rounded-md text-sm">
+                    {isEditing ? (
+                      <div className="flex flex-col gap-2">
+                        <Input
+                          value={editingCategoryName}
+                          onChange={(e) => setEditingCategoryName(e.target.value)}
+                          disabled={!hasPermission('manageSettings')}
+                        />
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            onClick={async () => {
+                              if (!hasPermission('manageSettings')) return;
+                              const next = editingCategoryName.trim();
+                              if (!next) return;
+                              await updateCategory(cat.id, { name: next });
+                              setEditingCategoryId(null);
+                              setEditingCategoryName('');
+                            }}
+                            disabled={!hasPermission('manageSettings') || !editingCategoryName.trim()}
+                          >
+                            Save
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setEditingCategoryId(null);
+                              setEditingCategoryName('');
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={async () => {
+                              if (!hasPermission('manageSettings')) return;
+                              await deleteCategory(cat.id);
+                              setEditingCategoryId(null);
+                              setEditingCategoryName('');
+                            }}
+                            disabled={!hasPermission('manageSettings')}
+                          >
+                            Delete
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="truncate font-medium">{cat.name}</div>
+                        </div>
+                        {hasPermission('manageSettings') && (
+                          <div className="flex items-center gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setEditingCategoryId(cat.id);
+                                setEditingCategoryName(cat.name);
+                              }}
+                            >
+                              Edit
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={async () => {
+                                await deleteCategory(cat.id);
+                              }}
+                            >
+                              Delete
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
             )}
           </div>
         </CardContent>
@@ -249,10 +364,196 @@ export default function Settings() {
             {suppliersSnap.suppliers.length === 0 ? (
               <div className="text-sm text-muted-foreground">No suppliers defined.</div>
             ) : (
-              suppliersSnap.suppliers.map((s) => (
-                <div key={s.id} className="p-3 bg-muted rounded-md text-sm">{s.name}{s.code ? ` • ${s.code}` : ''}</div>
-              ))
+              suppliersSnap.suppliers.map((s) => {
+                const isEditing = editingSupplierId === s.id;
+                return (
+                  <div key={s.id} className="p-3 bg-muted rounded-md text-sm">
+                    {isEditing ? (
+                      <div className="flex flex-col gap-2">
+                        <Input
+                          value={editingSupplierName}
+                          onChange={(e) => setEditingSupplierName(e.target.value)}
+                          disabled={!hasPermission('manageSettings')}
+                          placeholder="Supplier name"
+                        />
+                        <Input
+                          value={editingSupplierCode}
+                          onChange={(e) => setEditingSupplierCode(e.target.value)}
+                          disabled={!hasPermission('manageSettings')}
+                          placeholder="Code (optional)"
+                        />
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            onClick={async () => {
+                              if (!hasPermission('manageSettings')) return;
+                              const nextName = editingSupplierName.trim();
+                              if (!nextName) return;
+                              const nextCode = editingSupplierCode.trim() || undefined;
+                              await updateSupplier(s.id, { name: nextName, code: nextCode });
+                              setEditingSupplierId(null);
+                              setEditingSupplierName('');
+                              setEditingSupplierCode('');
+                            }}
+                            disabled={!hasPermission('manageSettings') || !editingSupplierName.trim()}
+                          >
+                            Save
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setEditingSupplierId(null);
+                              setEditingSupplierName('');
+                              setEditingSupplierCode('');
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={async () => {
+                              if (!hasPermission('manageSettings')) return;
+                              await deleteSupplier(s.id);
+                              setEditingSupplierId(null);
+                              setEditingSupplierName('');
+                              setEditingSupplierCode('');
+                            }}
+                            disabled={!hasPermission('manageSettings')}
+                          >
+                            Delete
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="truncate font-medium">{s.name}</div>
+                          {s.code ? <div className="text-xs text-muted-foreground truncate">{s.code}</div> : null}
+                        </div>
+                        {hasPermission('manageSettings') && (
+                          <div className="flex items-center gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setEditingSupplierId(s.id);
+                                setEditingSupplierName(s.name);
+                                setEditingSupplierCode(s.code ?? '');
+                              }}
+                            >
+                              Edit
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={async () => {
+                                await deleteSupplier(s.id);
+                              }}
+                            >
+                              Delete
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
             )}
+          </div>
+
+          <div className="mt-6 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2 items-end">
+            <div className="space-y-1">
+              <div className="text-sm font-medium">Currency code</div>
+              <Popover open={currencyPickerOpen} onOpenChange={setCurrencyPickerOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={currencyPickerOpen}
+                    className="w-full justify-between"
+                    disabled={!hasPermission('manageSettings')}
+                  >
+                    <span className="truncate">{currencyDraft || 'Select currency'}</span>
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[340px] p-0" align="start">
+                  <Command>
+                    <CommandInput
+                      placeholder="Search currency code… (e.g. ZMW, USD)"
+                      value={currencySearch}
+                      onValueChange={(v) => setCurrencySearch(String(v ?? '').toUpperCase())}
+                    />
+                    <CommandList>
+                      <CommandEmpty>
+                        {currencySearch.trim() ? (
+                          <span className="text-sm">No match. Use “{currencySearch.trim().toUpperCase()}”.</span>
+                        ) : (
+                          <span className="text-sm">Type to search currencies.</span>
+                        )}
+                      </CommandEmpty>
+
+                      <CommandGroup heading="Select">
+                        {(currencySearch.trim() ? [currencySearch.trim().toUpperCase()] : [])
+                          .filter((x) => x.length > 0)
+                          .map((custom) => (
+                            <CommandItem
+                              key={`custom-${custom}`}
+                              value={custom}
+                              onSelect={() => {
+                                setCurrencyDraft(custom);
+                                setCurrencyPickerOpen(false);
+                                setCurrencySearch('');
+                              }}
+                            >
+                              <Check className={cn('mr-2 h-4 w-4', currencyDraft === custom ? 'opacity-100' : 'opacity-0')} />
+                              Use “{custom}”
+                            </CommandItem>
+                          ))}
+                      </CommandGroup>
+
+                      <CommandGroup heading="All currencies">
+                        {currencyOptions.slice(0, 500).map((c) => (
+                          <CommandItem
+                            key={c}
+                            value={c}
+                            onSelect={(val) => {
+                              const next = String(val || c).toUpperCase();
+                              setCurrencyDraft(next);
+                              setCurrencyPickerOpen(false);
+                              setCurrencySearch('');
+                            }}
+                          >
+                            <Check className={cn('mr-2 h-4 w-4', currencyDraft === c ? 'opacity-100' : 'opacity-0')} />
+                            {c}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+              <div className="text-xs text-muted-foreground">
+                Search and pick a currency (big list), or type a custom code. The whole app shows the correct currency symbol (e.g. ZMW → K, USD → $).
+              </div>
+            </div>
+
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (!hasPermission('manageSettings')) return;
+                const next = (currencyDraft.trim().toUpperCase() || 'ZMW') as any;
+                setCurrencyCode(next);
+                setSavedAt(new Date().toLocaleTimeString());
+              }}
+              disabled={!hasPermission('manageSettings') || !currencyDraft.trim()}
+            >
+              Apply currency
+            </Button>
           </div>
         </CardContent>
       </Card>

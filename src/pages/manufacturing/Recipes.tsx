@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Plus, Search, Edit, Trash2, Check, ChevronsUpDown } from 'lucide-react';
 import { PageHeader, DataTableWrapper, NumericCell } from '@/components/common/PageComponents';
+import { useCurrency } from '@/contexts/CurrencyContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -56,6 +57,7 @@ const formatIngredientDisplay = (ing: any, stock?: StockItem) => {
 };
 
 export default function Recipes() {
+    const { formatMoneyPrecise } = useCurrency();
   const recipes = useSyncExternalStore(subscribeManufacturingRecipes, getManufacturingRecipesSnapshot);
   const stockItems = useSyncExternalStore(subscribeStockItems, getStockItemsSnapshot);
 
@@ -143,7 +145,7 @@ export default function Recipes() {
                   <p className="text-sm text-muted-foreground">Code: {recipe.parentItemCode} • Output: {recipe.outputQty} {recipe.outputUnitType}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-lg font-bold">K {recipe.unitCost.toFixed(2)}/unit</span>
+                  <span className="text-lg font-bold">{formatMoneyPrecise(recipe.unitCost, 2)}/unit</span>
                   <Button variant="ghost" size="icon" onClick={() => onEdit(recipe.id)}><Edit className="h-4 w-4" /></Button>
                   <Button variant="ghost" size="icon" onClick={() => void handleDelete(recipe.id)}><Trash2 className="h-4 w-4" /></Button>
                 </div>
@@ -166,7 +168,8 @@ export default function Recipes() {
                         <TableCell>{ing.ingredientName}</TableCell>
                         <TableCell className="text-right">{formatIngredientDisplay(ing, stockById.get(ing.ingredientId))}</TableCell>
                         <TableCell className="text-right"><NumericCell value={ing.unitCost} prefix="K " /></TableCell>
-                        <TableCell className="text-right"><NumericCell value={ing.requiredQty * ing.unitCost} prefix="K " /></TableCell>
+                        <TableCell className="text-right"><NumericCell value={ing.unitCost} money /></TableCell>
+                        <TableCell className="text-right"><NumericCell value={ing.requiredQty * ing.unitCost} money /></TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -245,6 +248,8 @@ export function RecipeEditorDialog(props: {
   initialValues?: { parentItemName?: string; parentItemCode?: string; parentItemId?: string; finishedGoodDepartmentId?: DepartmentId };
 }) {
   const { open, onOpenChange, editing, stockItems, initialValues } = props;
+
+  const { formatMoneyPrecise } = useCurrency();
 
   const posMenuItems = useSyncExternalStore(subscribePosMenu, getPosMenuItemsSnapshot, getPosMenuItemsSnapshot);
 
@@ -543,7 +548,7 @@ export function RecipeEditorDialog(props: {
 
         <div className="flex items-center justify-between gap-3">
           <div className="text-sm text-muted-foreground">
-            Total cost: <span className="font-semibold text-foreground">K {cost.totalCost.toFixed(2)}</span> • Unit cost: <span className="font-semibold text-foreground">K {cost.unitCost.toFixed(2)}</span>
+            Total cost: <span className="font-semibold text-foreground">{formatMoneyPrecise(cost.totalCost, 2)}</span> • Unit cost: <span className="font-semibold text-foreground">{formatMoneyPrecise(cost.unitCost, 2)}</span>
           </div>
           <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
             <PopoverTrigger asChild>
@@ -661,7 +666,8 @@ export function RecipeEditorDialog(props: {
                         </div>
                       </TableCell>
                       <TableCell className="text-right"><NumericCell value={unitCost} prefix="K " /></TableCell>
-                      <TableCell className="text-right"><NumericCell value={lineTotal} prefix="K " /></TableCell>
+                      <TableCell className="text-right"><NumericCell value={unitCost} money /></TableCell>
+                      <TableCell className="text-right"><NumericCell value={lineTotal} money /></TableCell>
                       <TableCell className="text-right">
                         <Button variant="ghost" size="icon" onClick={() => removeIngredient(ing.id)}>
                           <Trash2 className="h-4 w-4" />

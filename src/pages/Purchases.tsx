@@ -37,6 +37,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import type { GRV, GRVItem } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCurrency } from '@/contexts/CurrencyContext';
 import { getStockItemsSnapshot, subscribeStockItems } from '@/lib/stockStore';
 import { getSuppliersSnapshot, refreshSuppliers, subscribeSuppliers } from '@/lib/suppliersStore';
 import {
@@ -71,6 +72,7 @@ function computeTotals(items: GRVItem[], applyVat: boolean, vatRate: number) {
 
 export default function Purchases() {
   const { user, brand, accountUser, hasPermission } = useAuth();
+  const { formatMoneyPrecise } = useCurrency();
   const canCreate = hasPermission('createGRV');
   const canConfirm = hasPermission('confirmGRV');
 
@@ -205,7 +207,7 @@ export default function Purchases() {
                       </>
                     )}
                   </div>
-                  <p className="font-medium mt-2">K {grv.total.toFixed(2)}</p>
+                  <p className="font-medium mt-2">{formatMoneyPrecise(grv.total, 2)}</p>
                 </div>
               </div>
               <DataTableWrapper className="border-0 rounded-none">
@@ -213,7 +215,12 @@ export default function Purchases() {
                   <TableHeader><TableRow><TableHead>Item</TableHead><TableHead className="text-right">Qty</TableHead><TableHead className="text-right">Unit Cost</TableHead><TableHead className="text-right">Total</TableHead></TableRow></TableHeader>
                   <TableBody>
                     {grv.items.map((item) => (
-                      <TableRow key={item.id}><TableCell>{item.itemName}</TableCell><TableCell className="text-right">{item.quantity}</TableCell><TableCell className="text-right"><NumericCell value={item.unitCost} prefix="K " /></TableCell><TableCell className="text-right"><NumericCell value={item.totalCost} prefix="K " /></TableCell></TableRow>
+                      <TableRow key={item.id}>
+                        <TableCell>{item.itemName}</TableCell>
+                        <TableCell className="text-right">{item.quantity}</TableCell>
+                        <TableCell className="text-right"><NumericCell value={item.unitCost} money /></TableCell>
+                        <TableCell className="text-right"><NumericCell value={item.totalCost} money /></TableCell>
+                      </TableRow>
                     ))}
                   </TableBody>
                 </Table>
@@ -317,6 +324,7 @@ function GRVDialog({
   currentUserName: string;
   brandId: string;
 }) {
+  const { formatMoneyPrecise } = useCurrency();
   const defaults = useMemo(() => {
     return {
       supplierId: '',
@@ -543,7 +551,7 @@ function GRVDialog({
                                   <div className="font-medium">{s.name}</div>
                                   <div className="text-xs text-muted-foreground font-mono">{s.code} • Stock {s.currentStock} {s.unitType}</div>
                                 </div>
-                                <div className="text-xs font-mono text-muted-foreground">K {s.currentCost.toFixed(2)}</div>
+                                <div className="text-xs font-mono text-muted-foreground">{formatMoneyPrecise(s.currentCost, 2)}</div>
                               </div>
                             </CommandItem>
                           ))}
@@ -600,7 +608,7 @@ function GRVDialog({
                         />
                       </TableCell>
                       <TableCell className="text-right">
-                        <NumericCell value={round2(i.quantity * i.unitCost)} prefix="K " />
+                        <NumericCell value={round2(i.quantity * i.unitCost)} money />
                       </TableCell>
                       <TableCell className="text-right">
                         <Button
@@ -635,15 +643,15 @@ function GRVDialog({
               <div className="w-full sm:w-[340px] space-y-2">
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-muted-foreground">Subtotal</span>
-                  <span className="font-mono">K {totals.subtotal.toFixed(2)}</span>
+                  <span className="font-mono">{formatMoneyPrecise(totals.subtotal, 2)}</span>
                 </div>
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-muted-foreground">Tax</span>
-                  <span className="font-mono">K {totals.tax.toFixed(2)}</span>
+                  <span className="font-mono">{formatMoneyPrecise(totals.tax, 2)}</span>
                 </div>
                 <div className="flex items-center justify-between text-base font-semibold">
                   <span>Total</span>
-                  <span className="font-mono">K {totals.total.toFixed(2)}</span>
+                  <span className="font-mono">{formatMoneyPrecise(totals.total, 2)}</span>
                 </div>
               </div>
             </div>

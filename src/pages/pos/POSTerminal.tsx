@@ -28,11 +28,13 @@ import { parseSmartQuantityQuery, smartSearchMenuItems } from '@/lib/smartMenuSe
 import { getPosPaymentRequestsSnapshot, resolvePosPaymentRequest, subscribePosPaymentRequests } from '@/lib/posPaymentRequestStore';
 import { ROLE_NAMES } from '@/types/auth';
 import { supabase } from '@/lib/supabaseClient';
+import { useCurrency } from '@/contexts/CurrencyContext';
 
 export default function POSTerminal() {
   const auth = useAuth();
   const { user, hasPermission, logout, operatorPin } = auth;
   const { settings } = useBranding();
+  const { formatMoneyPrecise } = useCurrency();
   const navigate = useNavigate();
   const location = useLocation();
   const menu = usePosMenu();
@@ -1369,7 +1371,7 @@ export default function POSTerminal() {
                   <div className="flex-1 min-w-0">
                     <p className="font-medium text-sm truncate">{item.menuItemName}</p>
                     <p className="text-xs text-muted-foreground">
-                      {item.quantity} × K {item.unitPrice.toFixed(2)}
+                      {item.quantity} × {formatMoneyPrecise(item.unitPrice, 2)}
                       {(item.discountPercent ?? 0) > 0 ? `  (−${item.discountPercent}%)` : ''}
                     </p>
                     {(item.modifiers?.length ?? 0) > 0 && (
@@ -1403,7 +1405,7 @@ export default function POSTerminal() {
                     >
                       <Plus className="h-3 w-3" />
                     </Button>
-                    <span className="w-20 text-right font-bold">K {item.total.toFixed(0)}</span>
+                    <span className="w-20 text-right font-bold">{formatMoneyPrecise(item.total, 0)}</span>
                   </div>
                 </div>
               ))}
@@ -1499,21 +1501,21 @@ export default function POSTerminal() {
           <div className="space-y-1 mb-3">
             <div className="flex justify-between text-sm">
               <span>Subtotal</span>
-              <span>K {orderTotals.subtotal.toFixed(2)}</span>
+              <span>{formatMoneyPrecise(orderTotals.subtotal, 2)}</span>
             </div>
             {orderTotals.discountAmount > 0 ? (
               <div className="flex justify-between text-sm text-muted-foreground">
                 <span>Discount ({orderTotals.discountPercent.toFixed(0)}%)</span>
-                <span>− K {orderTotals.discountAmount.toFixed(2)}</span>
+                <span>− {formatMoneyPrecise(orderTotals.discountAmount, 2)}</span>
               </div>
             ) : null}
             <div className="flex justify-between text-sm text-muted-foreground">
               <span>VAT (16%)</span>
-              <span>K {orderTotals.tax.toFixed(2)}</span>
+              <span>{formatMoneyPrecise(orderTotals.tax, 2)}</span>
             </div>
             <div className="flex justify-between text-lg font-bold pt-1 border-t">
               <span>Total</span>
-              <span className="text-primary">K {orderTotals.total.toFixed(2)}</span>
+              <span className="text-primary">{formatMoneyPrecise(orderTotals.total, 2)}</span>
             </div>
           </div>
 
@@ -1638,7 +1640,7 @@ export default function POSTerminal() {
                         Requested by {r.requestedBy ?? 'staff'} • {new Date(r.createdAt).toLocaleTimeString()}
                       </div>
                       <div className="text-sm mt-1">
-                        Total: <span className="font-mono">K {Number(r.total).toFixed(2)}</span>
+                        Total: <span className="font-mono">{formatMoneyPrecise(Number(r.total), 2)}</span>
                       </div>
                     </div>
                     <div className="flex gap-2">
@@ -1691,7 +1693,7 @@ export default function POSTerminal() {
                           {o.staffName} • {new Date(o.createdAt).toLocaleString()}
                         </div>
                         <div className="text-sm mt-1">
-                          Total: <span className="font-mono">K {o.total.toFixed(2)}</span>
+                          Total: <span className="font-mono">{formatMoneyPrecise(o.total, 2)}</span>
                         </div>
                       </div>
                       <Button
