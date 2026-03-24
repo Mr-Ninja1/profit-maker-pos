@@ -1,5 +1,6 @@
 import { departments as seededDepartments } from '@/data/mockData';
 import { isSupabaseConfigured, supabase } from '@/lib/supabaseClient';
+import { getActiveBrandId, subscribeActiveBrandId } from '@/lib/activeBrand';
 
 export type CategoryRow = { id: string; name: string };
 
@@ -12,6 +13,10 @@ type CategoriesSnapshot = {
 
 const STORAGE_KEY = 'pmx.categories.v1';
 const listeners = new Set<() => void>();
+
+function storageKeyForBrand(brandId: string | null) {
+  return `${STORAGE_KEY}.${brandId ? String(brandId) : 'none'}`;
+}
 
 function safeParse(raw: string | null): CategoriesSnapshot | null {
   if (!raw) return null;
@@ -29,10 +34,10 @@ function safeParse(raw: string | null): CategoriesSnapshot | null {
   }
 }
 
-function loadInitial(): CategoriesSnapshot {
+function loadInitial(brandId: string | null): CategoriesSnapshot {
   let raw: string | null = null;
   try {
-    raw = localStorage.getItem(STORAGE_KEY);
+    raw = localStorage.getItem(storageKeyForBrand(brandId));
   } catch {
     raw = null;
   }
@@ -41,12 +46,13 @@ function loadInitial(): CategoriesSnapshot {
   return { categories: seededDepartments, status: 'idle', lastLoadedAt: null, error: null };
 }
 
-let snapshot: CategoriesSnapshot = loadInitial();
+let currentBrandId: string | null = getActiveBrandId();
+let snapshot: CategoriesSnapshot = loadInitial(currentBrandId);
 let inflight: Promise<void> | null = null;
 
 function persist() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+    localStorage.setItem(storageKeyForBrand(currentBrandId), JSON.stringify(snapshot));
   } catch {
     // ignore
   }
@@ -65,6 +71,14 @@ export function getCategoriesSnapshot() {
   return snapshot;
 }
 
+// Reset cached snapshot when brand changes to prevent cross-brand bleed.
+subscribeActiveBrandId(() => {
+  currentBrandId = getActiveBrandId();
+  inflight = null;
+  snapshot = loadInitial(currentBrandId);
+  emit();
+});
+
 export async function refreshCategories() {
   if (inflight) return inflight;
 
@@ -75,7 +89,13 @@ export async function refreshCategories() {
     try {
       if (isSupabaseConfigured() && supabase) {
         // Note: legacy table name is `departments`, but UX calls them Categories.
-        const { data, error } = await supabase.from('departments').select('id,name').order('name', { ascending: true });
+        const brandId = currentBrandId;
+        if (!brandId) throw new Error('NO_BRAND');
+        const { data, error } = await supabase
+          .from('departments')
+          .select('id,name')
+          .eq('brand_id', brandId)
+          .order('name', { ascending: true });
         if (error) throw error;
         if (Array.isArray(data)) {
           snapshot = {
@@ -100,6 +120,17 @@ export async function refreshCategories() {
       persist();
       emit();
     } catch (e: any) {
+      if (String(e?.message ?? '') === 'NO_BRAND') {
+        snapshot = {
+          categories: seededDepartments,
+          status: 'ready',
+          lastLoadedAt: Date.now(),
+          error: null,
+        };
+        persist();
+        emit();
+        return;
+      }
       snapshot = {
         ...snapshot,
         status: 'error',
@@ -126,7 +157,12 @@ export async function addCategory(name: string) {
   if (!trimmed) return;
 
   if (isSupabaseConfigured() && supabase) {
-    const { data, error } = await supabase.from('departments').insert({ name: trimmed }).select('id,name').single();
+    if (!currentBrandId) throw new Error('Missing brand id');
+    const { data, error } = await supabase
+      .from('departments')
+      .insert({ name: trimmed, brand_id: currentBrandId })
+      .select('id,name')
+      .single();
     if (error) throw error;
 
     const row: CategoryRow = { id: String((data as any).id), name: String((data as any).name ?? trimmed) };
@@ -162,6 +198,7 @@ export async function updateCategory(id: string, patch: { name: string }) {
     .from('departments')
     .update({ name })
     .eq('id', categoryId)
+    .eq('brand_id', currentBrandId ?? '__no_brand__')
     .select('id,name')
     .single();
   if (error) throw error;
@@ -181,7 +218,11 @@ export async function deleteCategory(id: string) {
   if (!categoryId) return;
 
   if (isSupabaseConfigured() && supabase && !categoryId.startsWith('local-')) {
-    const { error } = await supabase.from('departments').delete().eq('id', categoryId);
+    const { error } = await supabase
+      .from('departments')
+      .delete()
+      .eq('id', categoryId)
+      .eq('brand_id', currentBrandId ?? '__no_brand__');
     if (error) throw error;
   }
 

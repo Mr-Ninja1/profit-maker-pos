@@ -1,6 +1,13 @@
 import type { PaymentMethod } from '@/types/pos';
+import { getActiveBrandId, subscribeActiveBrandId } from '@/lib/activeBrand';
 
 const STORAGE_KEY = 'mthunzi.pos.paymentRequests.v1';
+
+function storageKeyForBrand(brandId: string | null) {
+  return `${STORAGE_KEY}.${brandId ? String(brandId) : 'none'}`;
+}
+
+let currentBrandId: string | null = getActiveBrandId();
 
 type Listener = () => void;
 
@@ -24,6 +31,12 @@ type StateV1 = {
 let state: StateV1 | null = null;
 const listeners = new Set<Listener>();
 
+subscribeActiveBrandId(() => {
+  currentBrandId = getActiveBrandId();
+  state = null;
+  emit();
+});
+
 function emit() {
   for (const l of listeners) l();
 }
@@ -36,7 +49,7 @@ function safeId(prefix: string) {
 function load(): StateV1 {
   if (state) return state;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKeyForBrand(currentBrandId));
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<StateV1>;
       if (parsed.version === 1 && Array.isArray(parsed.requests)) {
@@ -49,7 +62,7 @@ function load(): StateV1 {
   }
   state = { version: 1, requests: [] };
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    localStorage.setItem(storageKeyForBrand(currentBrandId), JSON.stringify(state));
   } catch {
     // ignore
   }
@@ -59,7 +72,7 @@ function load(): StateV1 {
 function save(next: StateV1) {
   state = next;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    localStorage.setItem(storageKeyForBrand(currentBrandId), JSON.stringify(next));
   } catch {
     // ignore
   }

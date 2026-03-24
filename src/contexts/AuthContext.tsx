@@ -8,6 +8,7 @@ import {
   saveAuthSnapshot,
   setActiveUserId,
 } from '@/lib/authCache';
+import { setActiveBrandId } from '@/lib/activeBrand';
 import { ensureCategoriesLoaded, refreshCategories } from '@/lib/categoriesStore';
 import { ensureSuppliersLoaded, refreshSuppliers } from '@/lib/suppliersStore';
 
@@ -865,6 +866,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // Keep an in-memory active brand id for fast brand-scoped stores.
+  // This avoids repeated localStorage reads and prevents cross-brand data bleed.
+  const activeBrandId = String((brand as any)?.id ?? (user as any)?.brand_id ?? '');
+  useEffect(() => {
+    setActiveBrandId(activeBrandId || null);
+  }, [activeBrandId]);
+
   return (
     <AuthContext.Provider value={{ 
       user, 
@@ -892,6 +900,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     </AuthContext.Provider>
   );
 }
+
 
 export const useAuth = () => {
   const context = useContext(AuthContext);

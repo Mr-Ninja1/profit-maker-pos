@@ -1,8 +1,13 @@
 import type { POSCategory, POSMenuItem } from '@/types/pos';
 // No hardcoded defaults: rely on remote data or an explicit empty state
 import { isSupabaseConfigured, supabase } from '@/lib/supabaseClient';
+import { getActiveBrandId, subscribeActiveBrandId } from '@/lib/activeBrand';
 
 const STORAGE_KEY = 'mthunzi.posMenu.v1';
+
+function storageKeyForBrand(brandId: string | null) {
+  return `${STORAGE_KEY}.${brandId ? String(brandId) : 'none'}`;
+}
 
 type PosMenuStateV1 = {
   version: 1;
@@ -14,9 +19,23 @@ const listeners = new Set<() => void>();
 
 let cachedRaw: string | null = null;
 let cachedState: PosMenuStateV1 | null = null;
+let currentBrandId: string | null = getActiveBrandId();
 
 const useRemote = isSupabaseConfigured() && supabase;
 let remoteInitStarted = false;
+
+function resetForBrand(nextBrandId: string | null) {
+  currentBrandId = nextBrandId;
+  cachedRaw = null;
+  cachedState = null;
+  remoteInitStarted = false;
+}
+
+// Reset state when brand changes to prevent cross-brand bleed.
+subscribeActiveBrandId(() => {
+  resetForBrand(getActiveBrandId());
+  notify();
+});
 
 // No seeded images or hardcoded menu items. The store uses remote data or explicit local state.
 
@@ -27,6 +46,14 @@ function notify() {
 async function refreshFromSupabase() {
   if (!useRemote) return;
   try {
+    const brandId = currentBrandId;
+    if (!brandId) {
+      cachedState = { version: 1, categories: [], items: [] };
+      cachedRaw = JSON.stringify(cachedState);
+      notify();
+      return;
+    }
+
     const client = supabase!.schema('erp');
 
     let catRows: any = null;
@@ -37,13 +64,20 @@ async function refreshFromSupabase() {
     // unavailable or the query fails, fall back to the legacy `erp` schema.
       try {
         // Use `departments` as the canonical table for categories in the public schema.
-        const resCats = await supabase!.from('departments').select('id,name').order('name', { ascending: true });
+        const resCats = await supabase!
+          .from('departments')
+          .select('id,name')
+          .eq('brand_id', brandId)
+          .order('name', { ascending: true });
       if (resCats.error) throw resCats.error;
 
       // Map products to menu items. Expect `products` to have `id, code, name, category_id, base_price`.
       // include image_storage_path and description so UI can display images and details
       // avoid selecting `image_url` (may not exist) and avoid aliasing to keep PostgREST happy
-      const resItems = await supabase!.from('products').select('id,code,name,category_id,department_id,base_price,image_storage_path,description');
+      const resItems = await supabase!
+        .from('products')
+        .select('id,code,name,category_id,department_id,base_price,image_storage_path,description')
+        .eq('brand_id', brandId);
       if (resItems.error) throw resItems.error;
 
       // Normalize rows to the expected shape used below
@@ -66,9 +100,16 @@ async function refreshFromSupabase() {
     } catch (pubErr) {
       console.warn('[posMenuStore] refresh using public tables failed, retrying legacy erp schema', pubErr);
       try {
-        const resCats = await client.from('pos_categories').select('id,name,color,sort_order').order('sort_order', { ascending: true });
+        const resCats = await client
+          .from('pos_categories')
+          .select('id,name,color,sort_order')
+          .eq('brand_id', brandId)
+          .order('sort_order', { ascending: true });
         if (resCats.error) throw resCats.error;
-        const resItems = await client.from('pos_menu_items').select('id,code,name,category_id,price,cost,image,is_available,modifier_groups,track_inventory');
+        const resItems = await client
+          .from('pos_menu_items')
+          .select('id,code,name,category_id,price,cost,image,is_available,modifier_groups,track_inventory')
+          .eq('brand_id', brandId);
         if (resItems.error) throw resItems.error;
         catRows = resCats.data;
         itemRows = resItems.data;
@@ -128,6 +169,11 @@ function applySeedImagesToState(state: PosMenuStateV1): PosMenuStateV1 {
 }
 
 function ensureLoaded(): PosMenuStateV1 {
+  const active = getActiveBrandId();
+  if (active !== currentBrandId) {
+    resetForBrand(active);
+  }
+
   // IMPORTANT: `useSyncExternalStore` calls `getSnapshot` multiple times.
   // `getSnapshot` must return the exact same reference unless the store changed.
   // So we keep an in-memory snapshot and do NOT read localStorage during render.
@@ -156,7 +202,7 @@ function ensureLoaded(): PosMenuStateV1 {
 
   let raw: string | null = null;
   try {
-    raw = localStorage.getItem(STORAGE_KEY);
+    raw = localStorage.getItem(storageKeyForBrand(currentBrandId));
   } catch {
     raw = null;
   }
@@ -174,7 +220,7 @@ function ensureLoaded(): PosMenuStateV1 {
   const empty = seedDefaults();
   const emptyRaw = JSON.stringify(empty);
   try {
-    localStorage.setItem(STORAGE_KEY, emptyRaw);
+    localStorage.setItem(storageKeyForBrand(currentBrandId), emptyRaw);
   } catch {
     // ignore
   }
@@ -187,7 +233,7 @@ function save(state: PosMenuStateV1) {
   // Local mode only
   const raw = JSON.stringify(state);
   try {
-    localStorage.setItem(STORAGE_KEY, raw);
+    localStorage.setItem(storageKeyForBrand(currentBrandId), raw);
   } catch {
     // ignore
   }
@@ -221,6 +267,7 @@ export function getPosMenuItemsSnapshot(): POSMenuItem[] {
 }
 
 export function upsertPosCategory(category: POSCategory) {
+  if (useRemote && !currentBrandId) throw new Error('Missing brand id');
   const state = ensureLoaded();
   const idx = state.categories.findIndex((c) => c.id === category.id);
   const next = idx >= 0
@@ -244,6 +291,7 @@ export function upsertPosCategory(category: POSCategory) {
         const client = supabase!.schema('erp');
         const { data, error, status } = await client.from('pos_categories').upsert({
           id: category.id,
+          brand_id: currentBrandId,
           name: category.name,
           color: category.color ?? null,
           sort_order: category.sortOrder,
@@ -259,6 +307,7 @@ export function upsertPosCategory(category: POSCategory) {
       const { data: pubData, error: pubErr, status: pubStatus } = await supabase!.from('departments').upsert({
         id: category.id,
         name: category.name,
+        brand_id: currentBrandId,
       }).select();
       if (pubErr) {
         console.error('[posMenuStore] upsert category failed (public)', { status: pubStatus, error: pubErr, data: pubData });
@@ -272,6 +321,7 @@ export function upsertPosCategory(category: POSCategory) {
 }
 
 export function deletePosCategory(categoryId: string) {
+  if (useRemote && !currentBrandId) throw new Error('Missing brand id');
   const state = ensureLoaded();
   const nextState: PosMenuStateV1 = {
     ...state,
@@ -293,12 +343,22 @@ export function deletePosCategory(categoryId: string) {
       // Try erp schema first
       try {
         const client = supabase!.schema('erp');
-        const { data: delItemsData, error: itemsErr, status: delItemsStatus } = await client.from('pos_menu_items').delete().eq('category_id', categoryId).select();
+        const { data: delItemsData, error: itemsErr, status: delItemsStatus } = await client
+          .from('pos_menu_items')
+          .delete()
+          .eq('category_id', categoryId)
+          .eq('brand_id', currentBrandId)
+          .select();
         if (itemsErr) {
           console.error('[posMenuStore] delete category items failed (erp)', { status: delItemsStatus, error: itemsErr, data: delItemsData });
           return;
         }
-        const { data: delCatData, error: delCatErr, status: delCatStatus } = await client.from('pos_categories').delete().eq('id', categoryId).select();
+        const { data: delCatData, error: delCatErr, status: delCatStatus } = await client
+          .from('pos_categories')
+          .delete()
+          .eq('id', categoryId)
+          .eq('brand_id', currentBrandId)
+          .select();
         if (delCatErr) {
           console.error('[posMenuStore] delete category failed (erp)', { status: delCatStatus, error: delCatErr, data: delCatData });
           return;
@@ -310,12 +370,22 @@ export function deletePosCategory(categoryId: string) {
       }
 
       // public fallback: delete products with category then delete category
-      const { data: delItemsData, error: itemsErr, status: delItemsStatus } = await supabase!.from('products').delete().or(`department_id.eq.${categoryId},category_id.eq.${categoryId}`).select();
+      const { data: delItemsData, error: itemsErr, status: delItemsStatus } = await supabase!
+        .from('products')
+        .delete()
+        .or(`department_id.eq.${categoryId},category_id.eq.${categoryId}`)
+        .eq('brand_id', currentBrandId)
+        .select();
       if (itemsErr) {
         console.error('[posMenuStore] delete category items failed (public)', { status: delItemsStatus, error: itemsErr, data: delItemsData });
         return;
       }
-      const { data: delCatData, error: delCatErr, status: delCatStatus } = await supabase!.from('departments').delete().eq('id', categoryId).select();
+      const { data: delCatData, error: delCatErr, status: delCatStatus } = await supabase!
+        .from('departments')
+        .delete()
+        .eq('id', categoryId)
+        .eq('brand_id', currentBrandId)
+        .select();
       if (delCatErr) {
         console.error('[posMenuStore] delete category failed (public)', { status: delCatStatus, error: delCatErr, data: delCatData });
         return;
@@ -328,6 +398,7 @@ export function deletePosCategory(categoryId: string) {
 }
 
 export async function upsertPosMenuItem(item: POSMenuItem): Promise<void> {
+  if (useRemote && !currentBrandId) throw new Error('Missing brand id');
   const state = ensureLoaded();
   const idx = state.items.findIndex((i) => i.id === item.id);
   const next = idx >= 0 ? state.items.map((i) => (i.id === item.id ? item : i)) : [item, ...state.items];
@@ -347,6 +418,7 @@ export async function upsertPosMenuItem(item: POSMenuItem): Promise<void> {
       const client = supabase!.schema('erp');
       const clientPayload: any = {
         id: item.id,
+        brand_id: currentBrandId,
         code: item.code,
         name: item.name,
         // set category_id to null when not provided to avoid FK violations
@@ -369,6 +441,7 @@ export async function upsertPosMenuItem(item: POSMenuItem): Promise<void> {
     }
 
     const pubPayload: any = {
+      brand_id: currentBrandId,
       code: item.code,
       name: item.name,
       base_price: item.price,
@@ -404,6 +477,7 @@ export async function upsertPosMenuItem(item: POSMenuItem): Promise<void> {
 }
 
 export async function deletePosMenuItem(itemId: string): Promise<void> {
+  if (useRemote && !currentBrandId) throw new Error('Missing brand id');
   const state = ensureLoaded();
   const nextState: PosMenuStateV1 = { ...state, items: state.items.filter((i) => i.id !== itemId) };
 
@@ -419,7 +493,7 @@ export async function deletePosMenuItem(itemId: string): Promise<void> {
   try {
     try {
       const client = supabase!.schema('erp');
-      const { data, error, status } = await client.from('pos_menu_items').delete().eq('id', itemId).select();
+      const { data, error, status } = await client.from('pos_menu_items').delete().eq('id', itemId).eq('brand_id', currentBrandId).select();
       if (error) {
         console.error('[posMenuStore] delete menu item failed (erp)', { status, error, data });
         throw error;
@@ -430,7 +504,7 @@ export async function deletePosMenuItem(itemId: string): Promise<void> {
       // fallback to public
     }
 
-    const { data, error, status } = await supabase!.from('products').delete().eq('id', itemId).select();
+    const { data, error, status } = await supabase!.from('products').delete().eq('id', itemId).eq('brand_id', currentBrandId).select();
     if (error) {
       console.error('[posMenuStore] delete menu item failed (public)', { status, error, data });
       throw error;
@@ -443,6 +517,7 @@ export async function deletePosMenuItem(itemId: string): Promise<void> {
 }
 
 export function resetPosMenuToDefaults() {
+  if (useRemote && !currentBrandId) throw new Error('Missing brand id');
   const seeded = seedDefaults();
 
   cachedRaw = JSON.stringify(seeded);
@@ -450,7 +525,7 @@ export function resetPosMenuToDefaults() {
   notify();
 
   if (!useRemote) {
-    localStorage.setItem(STORAGE_KEY, cachedRaw);
+    localStorage.setItem(storageKeyForBrand(currentBrandId), cachedRaw);
     return;
   }
 
@@ -458,14 +533,25 @@ export function resetPosMenuToDefaults() {
     try {
       try {
         const client = supabase!.schema('erp');
-        const { data: delItemsData, error: delItemsErr, status: delItemsStatus } = await client.from('pos_menu_items').delete().neq('id', '__never__').select();
+        const { data: delItemsData, error: delItemsErr, status: delItemsStatus } = await client
+          .from('pos_menu_items')
+          .delete()
+          .eq('brand_id', currentBrandId)
+          .neq('id', '__never__')
+          .select();
         if (delItemsErr) console.error('[posMenuStore] reset delete items failed (erp)', { status: delItemsStatus, error: delItemsErr, data: delItemsData });
-        const { data: delCatsData, error: delCatsErr, status: delCatsStatus } = await client.from('pos_categories').delete().neq('id', '__never__').select();
+        const { data: delCatsData, error: delCatsErr, status: delCatsStatus } = await client
+          .from('pos_categories')
+          .delete()
+          .eq('brand_id', currentBrandId)
+          .neq('id', '__never__')
+          .select();
         if (delCatsErr) console.error('[posMenuStore] reset delete categories failed (erp)', { status: delCatsStatus, error: delCatsErr, data: delCatsData });
 
         const { data: catData, error: catErr, status: catStatus } = await client.from('pos_categories').insert(
           seeded.categories.map((c) => ({
             id: c.id,
+            brand_id: currentBrandId,
             name: c.name,
             color: c.color ?? null,
             sort_order: c.sortOrder,
@@ -476,6 +562,7 @@ export function resetPosMenuToDefaults() {
         const { data: itemData, error: itemErr, status: itemStatus } = await client.from('pos_menu_items').insert(
           seeded.items.map((i) => ({
             id: i.id,
+            brand_id: currentBrandId,
             code: i.code,
             name: i.name,
             category_id: i.categoryId,
@@ -496,18 +583,28 @@ export function resetPosMenuToDefaults() {
       }
 
       try {
-        const { data: delItemsData, error: delItemsErr, status: delItemsStatus } = await supabase!.from('products').delete().neq('id', '__never__').select();
+        const { data: delItemsData, error: delItemsErr, status: delItemsStatus } = await supabase!
+          .from('products')
+          .delete()
+          .eq('brand_id', currentBrandId)
+          .neq('id', '__never__')
+          .select();
         if (delItemsErr) console.error('[posMenuStore] reset delete items failed (public)', { status: delItemsStatus, error: delItemsErr, data: delItemsData });
-        const { data: delCatsData, error: delCatsErr, status: delCatsStatus } = await supabase!.from('departments').delete().neq('id', '__never__').select();
+        const { data: delCatsData, error: delCatsErr, status: delCatsStatus } = await supabase!
+          .from('departments')
+          .delete()
+          .eq('brand_id', currentBrandId)
+          .neq('id', '__never__')
+          .select();
         if (delCatsErr) console.error('[posMenuStore] reset delete categories failed (public)', { status: delCatsStatus, error: delCatsErr, data: delCatsData });
 
         const { data: catData, error: catErr, status: catStatus } = await supabase!.from('departments').insert(
-          seeded.categories.map((c) => ({ id: c.id, name: c.name }))
+          seeded.categories.map((c) => ({ id: c.id, name: c.name, brand_id: currentBrandId }))
         ).select();
         if (catErr) console.error('[posMenuStore] reset insert categories failed (public)', { status: catStatus, error: catErr, data: catData });
 
         const { data: itemData, error: itemErr, status: itemStatus } = await supabase!.from('products').insert(
-          seeded.items.map((i) => ({ id: i.id, code: i.code, name: i.name, category_id: i.categoryId, department_id: i.categoryId, base_price: i.price }))
+          seeded.items.map((i) => ({ id: i.id, code: i.code, name: i.name, category_id: i.categoryId, department_id: i.categoryId, base_price: i.price, brand_id: currentBrandId }))
         ).select();
         if (itemErr) console.error('[posMenuStore] reset insert items failed (public)', { status: itemStatus, error: itemErr, data: itemData });
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import { CheckCircle2, Filter, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
+import { CheckCircle2, Filter, Loader2, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
 import { PageHeader, DataTableWrapper, NumericCell, StatusBadge } from '@/components/common/PageComponents';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -35,7 +35,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
-import type { GRV, GRVItem } from '@/types';
+import type { GRV, GRVItem, UnitType } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
 import { useCurrency } from '@/contexts/CurrencyContext';
 import { getStockItemsSnapshot, subscribeStockItems } from '@/lib/stockStore';
@@ -45,6 +45,7 @@ import {
   confirmGRV,
   createDraftGRV,
   deleteGRV,
+  forceDeleteGRV,
   getGRVsSnapshot,
   makeGRVItemFromStockItem,
   recomputeLine,
@@ -63,6 +64,59 @@ function round2(n: number) {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
+type GRVLine = GRVItem & {
+  /** UI-only: what unit the user is entering the quantity in (converted to base for storage). */
+  inputUnit?: string;
+  /** UI-only: quantity as entered by user in `inputUnit`. */
+  inputQty?: number;
+};
+
+function baseUnitLabel(unitType: UnitType): string {
+  if (unitType === 'KG') return 'kg';
+  if (unitType === 'LTRS') return 'l';
+  if (unitType === 'PACK') return 'pack';
+  return 'each';
+}
+
+function allowedInputUnits(unitType: UnitType, itemsPerPack?: number): string[] {
+  if (unitType === 'KG') return ['kg', 'g'];
+  if (unitType === 'LTRS') return ['l', 'ml'];
+  if (unitType === 'PACK') return itemsPerPack && itemsPerPack > 0 ? ['pack', 'each'] : ['pack'];
+  return ['each'];
+}
+
+function toBaseQuantity(params: {
+  qty: number;
+  inputUnit: string;
+  unitType: UnitType;
+  itemsPerPack?: number;
+}): number {
+  const qty = Number.isFinite(params.qty) ? params.qty : 0;
+  const inputUnit = String(params.inputUnit || '').toLowerCase();
+
+  if (params.unitType === 'KG') {
+    if (inputUnit === 'g') return round2(qty / 1000);
+    return round2(qty);
+  }
+
+  if (params.unitType === 'LTRS') {
+    if (inputUnit === 'ml') return round2(qty / 1000);
+    return round2(qty);
+  }
+
+  if (params.unitType === 'PACK') {
+    if (inputUnit === 'each') {
+      const n = Number(params.itemsPerPack ?? 0);
+      if (!n || n <= 0) return 0;
+      return round2(qty / n);
+    }
+    return round2(qty);
+  }
+
+  // EACH
+  return round2(qty);
+}
+
 function computeTotals(items: GRVItem[], applyVat: boolean, vatRate: number) {
   const subtotal = round2(items.reduce((sum, i) => sum + round2(i.quantity * i.unitCost), 0));
   const tax = applyVat ? round2(subtotal * vatRate) : 0;
@@ -76,21 +130,44 @@ export default function Purchases() {
   const canCreate = hasPermission('createGRV');
   const canConfirm = hasPermission('confirmGRV');
 
+  const [isLoadingGrvs, setIsLoadingGrvs] = useState(false);
+  const [deleteArmedId, setDeleteArmedId] = useState<string | null>(null);
+
   const grvs = useSyncExternalStore(subscribeGRVs, getGRVsSnapshot);
+
+  const stockItems = useSyncExternalStore(subscribeStockItems, getStockItemsSnapshot);
+  const stockById = useMemo(() => new Map(stockItems.map((s) => [String(s.id), s] as const)), [stockItems]);
+
+  const formatQty = (qty: number) => {
+    const n = Number(qty ?? 0);
+    if (!Number.isFinite(n)) return '0';
+    if (Math.abs(n - Math.round(n)) < 1e-9) return String(Math.round(n));
+    return n.toFixed(2);
+  };
 
   const brandId = (user?.brand_id ?? brand?.id ?? '') as string;
 
   useEffect(() => {
     if (!accountUser) return;
     if (!brandId) return;
-    void refreshGRVs(brandId).catch((e) => {
-      console.error('Failed to load GRVs', e);
-      toast({
-        title: 'Could not load GRVs',
-        description: (e as any)?.message ?? 'Please try again.',
-        variant: 'destructive',
+    let cancelled = false;
+    setIsLoadingGrvs(true);
+    void refreshGRVs(brandId)
+      .catch((e) => {
+        console.error('Failed to load GRVs', e);
+        toast({
+          title: 'Could not load GRVs',
+          description: (e as any)?.message ?? 'Please try again.',
+          variant: 'destructive',
+        });
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingGrvs(false);
       });
-    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [accountUser, brandId]);
 
   const [query, setQuery] = useState('');
@@ -167,8 +244,20 @@ export default function Purchases() {
       </div>
       
       <div className="space-y-4">
+        {isLoadingGrvs && grvs.length === 0 && (
+          <div className="mthunzi-card p-10 text-center">
+            <div className="flex items-center justify-center gap-2">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              <div className="text-sm text-muted-foreground">Loading GRVs…</div>
+            </div>
+          </div>
+        )}
+
         {filtered.map((grv) => (
-          <Card key={grv.id}>
+          <Card
+            key={grv.id}
+            onDoubleClick={() => setDeleteArmedId((prev) => (prev === grv.id ? null : grv.id))}
+          >
             <CardContent className="p-0">
               <div className="flex items-center justify-between p-4 border-b bg-muted/30">
                 <div>
@@ -180,31 +269,22 @@ export default function Purchases() {
                     <StatusBadge status={statusToBadge(grv.status).tone}>{statusToBadge(grv.status).label}</StatusBadge>
                     {grv.status === 'pending' && (
                       <>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => openEdit(grv.id)}
-                        >
+                        <Button size="sm" variant="outline" onClick={() => openEdit(grv.id)}>
                           <Pencil className="h-4 w-4 mr-2" />
                           Edit
                         </Button>
-                        <Button
-                          size="sm"
-                          onClick={() => setConfirmId(grv.id)}
-                          disabled={!canConfirm}
-                        >
+                        <Button size="sm" onClick={() => setConfirmId(grv.id)} disabled={!canConfirm}>
                           <CheckCircle2 className="h-4 w-4 mr-2" />
                           Confirm
                         </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="text-destructive hover:text-destructive"
-                          onClick={() => setDeleteId(grv.id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
                       </>
+                    )}
+
+                    {deleteArmedId === grv.id && (
+                      <Button size="sm" variant="destructive" onClick={() => setDeleteId(grv.id)}>
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Delete
+                      </Button>
                     )}
                   </div>
                   <p className="font-medium mt-2">{formatMoneyPrecise(grv.total, 2)}</p>
@@ -217,7 +297,9 @@ export default function Purchases() {
                     {grv.items.map((item) => (
                       <TableRow key={item.id}>
                         <TableCell>{item.itemName}</TableCell>
-                        <TableCell className="text-right">{item.quantity}</TableCell>
+                          <TableCell className="text-right">
+                            {formatQty(item.quantity)} {baseUnitLabel(((stockById.get(item.itemId)?.unitType ?? 'EACH') as UnitType))}
+                          </TableCell>
                         <TableCell className="text-right"><NumericCell value={item.unitCost} money /></TableCell>
                         <TableCell className="text-right"><NumericCell value={item.totalCost} money /></TableCell>
                       </TableRow>
@@ -229,7 +311,7 @@ export default function Purchases() {
           </Card>
         ))}
 
-        {filtered.length === 0 && (
+        {!isLoadingGrvs && filtered.length === 0 && (
           <div className="mthunzi-card p-10 text-center">
             <div className="text-lg font-semibold">No GRVs found</div>
             <div className="text-sm text-muted-foreground mt-1">Try adjusting your search or filters.</div>
@@ -281,7 +363,7 @@ export default function Purchases() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete GRV?</AlertDialogTitle>
             <AlertDialogDescription>
-              This removes the GRV permanently. Only pending GRVs can be deleted.
+              Pending GRVs will be deleted normally. Confirmed/cancelled GRVs will be force-deleted (dev cleanup) and this will NOT roll back stock quantities/costs.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -290,7 +372,10 @@ export default function Purchases() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => {
                 if (!deleteId) return;
-                void deleteGRV(deleteId)
+                const target = grvs.find((g) => g.id === deleteId) ?? null;
+                const op = target?.status === 'pending' ? deleteGRV(deleteId) : forceDeleteGRV(deleteId);
+
+                void op
                   .then(() => toast({ title: 'GRV deleted' }))
                   .catch((e) =>
                     toast({
@@ -341,7 +426,7 @@ function GRVDialog({
   const [receivedBy, setReceivedBy] = useState(defaults.receivedBy);
   const [applyVat, setApplyVat] = useState(true);
   const vatRate = 0.16;
-  const [items, setItems] = useState<GRVItem[]>([]);
+  const [items, setItems] = useState<GRVLine[]>([]);
 
   const [itemOpen, setItemOpen] = useState(false);
   const [itemQuery, setItemQuery] = useState('');
@@ -363,7 +448,17 @@ function GRVDialog({
       setSupplierName(active.supplierName);
       setPaymentType(active.paymentType);
       setReceivedBy(active.receivedBy || currentUserName);
-      setItems(active.items.map(recomputeLine));
+      setItems(
+        active.items.map((it) => {
+          const base = stockById.get(it.itemId)?.unitType ?? ('EACH' as UnitType);
+          const baseUnit = baseUnitLabel(base);
+          return {
+            ...recomputeLine(it),
+            inputUnit: baseUnit,
+            inputQty: Number(it.quantity ?? 0),
+          };
+        })
+      );
       setApplyVat(true);
       setItemQuery('');
       return;
@@ -406,15 +501,30 @@ function GRVDialog({
     const newItem = makeGRVItemFromStockItem(stockItemId);
     if (!newItem) return;
 
+    const base = stockById.get(stockItemId)?.unitType ?? ('EACH' as UnitType);
+    const baseUnit = baseUnitLabel(base);
+    const withUi: GRVLine = { ...newItem, inputUnit: baseUnit, inputQty: 1 };
+
     setItems(prev => {
       const existing = prev.find(p => p.itemId === newItem.itemId);
-      if (!existing) return [...prev, newItem];
-      return prev.map(p => (p.itemId === newItem.itemId ? recomputeLine({ ...p, quantity: p.quantity + 1 }) : p));
+      if (!existing) return [...prev, withUi];
+      // Add 1 in base unit.
+      const baseType = stockById.get(newItem.itemId)?.unitType ?? ('EACH' as UnitType);
+      const incBase = toBaseQuantity({ qty: 1, inputUnit: baseUnitLabel(baseType), unitType: baseType, itemsPerPack: stockById.get(newItem.itemId)?.itemsPerPack });
+      return prev.map(p =>
+        p.itemId === newItem.itemId
+          ? ({
+              ...recomputeLine({ ...p, quantity: (p.quantity ?? 0) + incBase }),
+              inputUnit: (p as any).inputUnit ?? baseUnitLabel(baseType),
+              inputQty: ((p as any).inputQty ?? p.quantity ?? 0) + 1,
+            } as any)
+          : p
+      );
     });
   };
 
-  const updateLine = (id: string, patch: Partial<Pick<GRVItem, 'quantity' | 'unitCost'>>) => {
-    setItems(prev => prev.map(p => (p.id === id ? recomputeLine({ ...p, ...patch }) : p)));
+  const updateLine = (id: string, patch: Partial<Pick<GRVLine, 'quantity' | 'unitCost' | 'inputQty' | 'inputUnit'>>) => {
+    setItems(prev => prev.map(p => (p.id === id ? (recomputeLine({ ...p, ...patch } as any) as any) : p)));
   };
 
   const removeLine = (id: string) => {
@@ -422,11 +532,12 @@ function GRVDialog({
   };
 
   const hasSupplier = Boolean(supplierId) || Boolean(supplierName.trim());
-  const canSave = !locked && hasSupplier && date && items.length > 0;
+  const hasValidLines = items.length > 0 && items.every((i) => Number(i.quantity ?? 0) > 0 && Number(i.unitCost ?? 0) >= 0);
+  const canSave = !locked && hasSupplier && date && hasValidLines;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[980px]">
+      <DialogContent className="sm:max-w-[980px] max-h-[85vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>{active ? `GRV ${active.grvNo}` : 'New GRV'}</DialogTitle>
           <DialogDescription>
@@ -434,7 +545,8 @@ function GRVDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-4">
+        <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+          <div className="grid gap-4">
           <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
             <div className="space-y-2 md:col-span-1">
               <Label htmlFor="grv-date">Date</Label>
@@ -568,8 +680,8 @@ function GRVDialog({
                 <TableHeader>
                   <TableRow>
                     <TableHead>Item</TableHead>
-                    <TableHead className="w-[140px] text-right">Qty</TableHead>
-                    <TableHead className="w-[180px] text-right">Unit Cost</TableHead>
+                    <TableHead className="w-[220px] text-right">Received Qty</TableHead>
+                    <TableHead className="w-[200px] text-right">Unit Cost</TableHead>
                     <TableHead className="w-[160px] text-right">Total</TableHead>
                     <TableHead className="w-[60px]"></TableHead>
                   </TableRow>
@@ -585,17 +697,68 @@ function GRVDialog({
                         </div>
                       </TableCell>
                       <TableCell className="text-right">
-                        <Input
-                          type="number"
-                          step="0.01"
-                          className="text-right"
-                          value={String(i.quantity)}
-                          onChange={e => updateLine(i.id, { quantity: Number(e.target.value) })}
-                          disabled={locked}
-                        />
-                        <div className="text-[11px] text-muted-foreground mt-1">
-                          Qty in {stockById.get(i.itemId)?.unitType ?? 'item unit'}
-                        </div>
+                        {(() => {
+                          const si = stockById.get(i.itemId);
+                          const unitType = (si?.unitType ?? 'EACH') as UnitType;
+                          const opts = allowedInputUnits(unitType, si?.itemsPerPack);
+                          const baseUnit = baseUnitLabel(unitType);
+                          const inputUnit = String((i as any).inputUnit ?? baseUnit).toLowerCase();
+                          const inputQty = Number.isFinite((i as any).inputQty) ? Number((i as any).inputQty) : Number(i.quantity ?? 0);
+
+                          return (
+                            <>
+                              <div className="flex items-center justify-end gap-2">
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  className="text-right"
+                                  value={Number.isFinite(inputQty) ? String(inputQty) : ''}
+                                  onChange={(e) => {
+                                    const nextQty = Number(e.target.value);
+                                    const baseQty = toBaseQuantity({
+                                      qty: nextQty,
+                                      inputUnit,
+                                      unitType,
+                                      itemsPerPack: si?.itemsPerPack,
+                                    });
+                                    updateLine(i.id, { inputQty: nextQty, inputUnit, quantity: baseQty });
+                                  }}
+                                  disabled={locked}
+                                />
+
+                                <Select
+                                  value={opts.includes(inputUnit) ? inputUnit : baseUnit}
+                                  onValueChange={(v) => {
+                                    const nextUnit = String(v).toLowerCase();
+                                    const baseQty = toBaseQuantity({
+                                      qty: inputQty,
+                                      inputUnit: nextUnit,
+                                      unitType,
+                                      itemsPerPack: si?.itemsPerPack,
+                                    });
+                                    updateLine(i.id, { inputUnit: nextUnit, inputQty, quantity: baseQty });
+                                  }}
+                                  disabled={locked}
+                                >
+                                  <SelectTrigger className="w-[110px]">
+                                    <SelectValue placeholder={baseUnit} />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {opts.map((u) => (
+                                      <SelectItem key={u} value={u}>
+                                        {u}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+
+                              <div className="text-[11px] text-muted-foreground mt-1">
+                                Stored in {baseUnit} {unitType === 'PACK' && si?.itemsPerPack ? `(${si.itemsPerPack} each/pack)` : ''}. We convert automatically.
+                              </div>
+                            </>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell className="text-right">
                         <Input
@@ -606,6 +769,9 @@ function GRVDialog({
                           onChange={e => updateLine(i.id, { unitCost: Number(e.target.value) })}
                           disabled={locked}
                         />
+                        <div className="text-[11px] text-muted-foreground mt-1">
+                          Cost per {(baseUnitLabel((stockById.get(i.itemId)?.unitType ?? 'EACH') as UnitType))}
+                        </div>
                       </TableCell>
                       <TableCell className="text-right">
                         <NumericCell value={round2(i.quantity * i.unitCost)} money />
@@ -656,9 +822,10 @@ function GRVDialog({
               </div>
             </div>
           </div>
+          </div>
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="pt-2">
           {active?.status === 'pending' && (
             <Button
               variant="outline"

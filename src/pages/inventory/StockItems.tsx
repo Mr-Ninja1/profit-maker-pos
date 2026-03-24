@@ -79,7 +79,59 @@ export default function StockItems() {
     return new Map((suppliersList ?? []).map((s) => [String(s.id), s] as const));
   }, [suppliersList]);
 
-  const { hasPermission } = useAuth();
+  const { hasPermission, brand, user } = useAuth();
+  const activeBrandId = String((brand as any)?.id ?? (user as any)?.brand_id ?? '');
+
+  const formatSupabaseError = (err: unknown) => {
+    const anyErr = err as any;
+    const message =
+      anyErr?.message ||
+      anyErr?.error_description ||
+      anyErr?.details ||
+      (typeof anyErr === 'string' ? anyErr : 'Unknown error');
+    const details = anyErr?.details;
+    const hint = anyErr?.hint;
+    const code = anyErr?.code;
+
+    const combined = [message, details, hint].filter(Boolean).join(' — ');
+    return code ? `${combined} (code: ${code})` : combined;
+  };
+
+  const formatStockItemMutationError = (err: unknown) => {
+    const msg = formatSupabaseError(err);
+    const lower = msg.toLowerCase();
+
+    if (lower.includes('items_per_pack') && (lower.includes('does not exist') || lower.includes('column'))) {
+      return (
+        'Your database is missing the `stock_items.items_per_pack` column, but the app is trying to use PACK support. ' +
+        'Apply migration 020_stock_items_pack_size.sql in Supabase, or avoid PACK unit for now.\n\n' +
+        msg
+      );
+    }
+
+    // FK delete restriction often surfaces as "violates foreign key constraint".
+    if (
+      lower.includes('foreign key') ||
+      lower.includes('violates') ||
+      lower.includes('still referenced') ||
+      lower.includes('constraint')
+    ) {
+      return (
+        'Cannot delete this stock item because it is referenced by existing records (e.g. GRVs, recipes, ledger). ' +
+        'Create a new item and stop using this one, or implement an archive/deactivate option.\n\n' +
+        msg
+      );
+    }
+
+    if (lower.includes('row-level security') || lower.includes('rls') || lower.includes('permission') || lower.includes('not allowed')) {
+      return (
+        'Permission denied by database policy (RLS). Check your role/brand access for stock settings.\n\n' +
+        msg
+      );
+    }
+
+    return msg;
+  };
 
   // Initialize filters from URL (deep-link support)
   useEffect(() => {
@@ -303,7 +355,16 @@ export default function StockItems() {
     return s.replace(/\.00$/, '').replace(/(\.[0-9])0$/, '$1');
   };
 
-  const formatStockLevel = (n: number, ut: UnitType) => `${formatNumberTrim(n)} ${mapUnitTypeToUnit(ut)}`;
+  const formatStockLevel = (n: number, ut: UnitType, itemsPerPack?: number) => {
+    if (ut === 'PACK') {
+      const per = Number(itemsPerPack);
+      if (isFinite(per) && per > 0) {
+        return `${formatNumberTrim(n / per)} ${mapUnitTypeToUnit(ut)}`;
+      }
+    }
+
+    return `${formatNumberTrim(n)} ${mapUnitTypeToUnit(ut)}`;
+  };
 
   return (
     <div>
@@ -545,6 +606,7 @@ export default function StockItems() {
                       name,
                       departmentId: departmentId as DepartmentId,
                       unitType: finalUnitType,
+                      itemsPerPack: ut === 'PACK' ? (Number(itemsPerPack) > 0 ? Number(itemsPerPack) : undefined) : undefined,
                       lowestCost: parseFloat(lowestCost) || 0,
                       highestCost: parseFloat(highestCost) || 0,
                       currentCost: parseFloat(currentCost) || 0,
@@ -555,12 +617,14 @@ export default function StockItems() {
                       const { addStockItem } = await import('@/lib/stockStore');
                       // Attach precise textual unit (e.g., 'g' or 'ml') so server can store it in `unit` column
                       (newItem as any).unitText = selectedRawUnit;
+                      // Attach brand id for brand-scoped policies
+                      if (activeBrandId) (newItem as any).brandId = activeBrandId;
                       await addStockItem(newItem as any);
                       setIsAddDialogOpen(false);
                       setAddForm({ code: '', name: '', departmentId: '', unitType: '', lowestCost: '', highestCost: '', currentCost: '', currentStock: '', reorderLevel: '', itemsPerPack: '' });
                       toast({ title: 'Item added', description: `${name} was added to inventory.` });
                     } catch (err) {
-                      toast({ title: 'Error', description: 'Failed to add item.' });
+                      toast({ title: 'Error', description: formatStockItemMutationError(err), variant: 'destructive' });
                     }
                     setIsSaving(false);
                   }}
@@ -743,7 +807,7 @@ export default function StockItems() {
                           const name = next === 'none' ? 'Unassigned' : suppliersById.get(String(next))?.name ?? 'Supplier';
                           toast({ title: 'Supplier updated', description: `${item.name} → ${name}` });
                         } catch (err) {
-                          toast({ title: 'Error', description: 'Failed to update supplier.' });
+                          toast({ title: 'Error', description: formatStockItemMutationError(err), variant: 'destructive' });
                         }
                       }}
                     >
@@ -771,7 +835,7 @@ export default function StockItems() {
                     <NumericCell value={item.currentCost} money />
                   </TableCell>
                   <TableCell className="text-right">
-                    <div className="font-medium">{formatStockLevel(item.currentStock, item.unitType)}</div>
+                    <div className="font-medium">{formatStockLevel(item.currentStock, item.unitType, item.itemsPerPack)}</div>
                   </TableCell>
                   <TableCell className="text-right">
                     <NumericCell value={stockValue} money />
@@ -808,7 +872,7 @@ export default function StockItems() {
                               await deleteStockItem(item.id);
                               toast({ title: 'Item deleted', description: `${item.name} was removed.` });
                             } catch (err) {
-                              toast({ title: 'Error', description: 'Failed to delete item.' });
+                              toast({ title: 'Error', description: formatStockItemMutationError(err), variant: 'destructive' });
                             }
                           }
                         }}
@@ -1001,6 +1065,7 @@ export default function StockItems() {
 
                                   await updateStockItem(editItemId, {
                                     ...editForm,
+                                    itemsPerPack: ut === 'PACK' ? (perPack > 0 ? perPack : undefined) : undefined,
                                     lowestCost: parseFloat(String(lowestCost)) || 0,
                                     highestCost: parseFloat(String(highestCost)) || 0,
                                     currentCost: parseFloat(String(currentCost)) || 0,
@@ -1010,7 +1075,7 @@ export default function StockItems() {
                                   setIsEditDialogOpen(false);
                                   toast({ title: 'Item updated', description: `${editForm.name} was updated.` });
                                 } catch (err) {
-                                  toast({ title: 'Error', description: 'Failed to update item.' });
+                                  toast({ title: 'Error', description: formatStockItemMutationError(err), variant: 'destructive' });
                                 }
                                 setIsEditSaving(false);
                               }}

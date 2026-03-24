@@ -3,14 +3,28 @@ import { stockItems as seededStockItems } from '@/data/mockData';
 import type { BatchProduction, Recipe } from '@/types';
 import { getPosMenuItems, upsertPosMenuItem } from '@/lib/posMenuStore';
 import { supabase, isSupabaseConfigured } from '@/lib/supabaseClient';
+import { getActiveBrandId, subscribeActiveBrandId } from '@/lib/activeBrand';
 
 const STORAGE_KEY = 'mthunzi.stockItems.v1';
+
+function storageKeyForBrand(brandId: string | null) {
+  return `${STORAGE_KEY}.${brandId ? String(brandId) : 'none'}`;
+}
 
 type Listener = () => void;
 
 let listeners: Listener[] = [];
 let state: StockItem[] | null = null;
 let initialized = false;
+let currentBrandId: string | null = getActiveBrandId();
+
+// Reset cached state on brand change to prevent cross-brand bleed.
+subscribeActiveBrandId(() => {
+  currentBrandId = getActiveBrandId();
+  state = null;
+  initialized = false;
+  emit();
+});
 
 function emit() {
   for (const l of listeners) l();
@@ -18,7 +32,7 @@ function emit() {
 
 function persist(next: StockItem[]) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    localStorage.setItem(storageKeyForBrand(currentBrandId), JSON.stringify(next));
   } catch {
     // ignore
   }
@@ -28,7 +42,7 @@ function load(): StockItem[] {
   if (state) return state;
 
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKeyForBrand(currentBrandId));
     if (raw) {
       const parsed = JSON.parse(raw) as StockItem[];
       if (Array.isArray(parsed)) {
@@ -52,7 +66,15 @@ function round2(n: number) {
 async function fetchFromDb() {
   if (!isSupabaseConfigured() || !supabase) return;
   try {
-    const { data, error } = await supabase.from('stock_items').select('*');
+    const brandId = currentBrandId;
+    if (!brandId) {
+      state = [];
+      persist(state);
+      emit();
+      return;
+    }
+
+    const { data, error } = await supabase.from('stock_items').select('*').eq('brand_id', brandId);
     if (error) {
       console.warn('Failed to fetch stock_items from Supabase', error);
       return;
@@ -81,6 +103,9 @@ async function fetchFromDb() {
       highestCost: typeof r.highest_cost === 'number' ? r.highest_cost : (typeof r.highestCost === 'number' ? r.highestCost : parseFloat(r.highest_cost ?? r.highestCost ?? 0) || 0),
       currentCost: typeof r.current_cost === 'number' ? r.current_cost : (typeof r.cost_per_unit === 'number' ? r.cost_per_unit : parseFloat(r.current_cost ?? r.cost_per_unit ?? 0) || 0),
       currentStock: typeof r.current_stock === 'number' ? r.current_stock : parseFloat(r.current_stock ?? r.stock_quantity ?? 0) || 0,
+      itemsPerPack: r.items_per_pack !== undefined && r.items_per_pack !== null
+        ? Number(r.items_per_pack)
+        : (r.itemsPerPack !== undefined && r.itemsPerPack !== null ? Number(r.itemsPerPack) : undefined),
       reorderLevel: r.reorder_level !== undefined ? (typeof r.reorder_level === 'number' ? r.reorder_level : parseFloat(r.reorder_level)) : (r.min_stock_level !== undefined ? (typeof r.min_stock_level === 'number' ? r.min_stock_level : parseFloat(r.min_stock_level)) : undefined),
       supplierId: r.supplier_id ?? r.supplierId ?? undefined,
     }));
@@ -101,7 +126,7 @@ export function subscribeStockItems(listener: Listener) {
     initialized = true;
     if (isSupabaseConfigured() && supabase) {
       // fetch once and populate
-      void fetchFromDb();
+      if (currentBrandId) void fetchFromDb();
     }
   }
 
@@ -121,24 +146,56 @@ export function getStockItemById(itemId: string): StockItem | undefined {
 export async function addStockItem(item: StockItem) {
   // Try supabase insert
   if (isSupabaseConfigured() && supabase) {
-    // Only include columns known to exist in the `stock_items` table per migration
-    const payload = {
+    const resolvedBrandId = (typeof (item as any).brandId === 'string' && (item as any).brandId)
+      ? String((item as any).brandId)
+      : currentBrandId;
+    if (!resolvedBrandId) throw new Error('Missing brand id');
+
+    // Keep payload aligned with the actual DB schema (snake_case columns).
+    // NOTE: Some deployed DBs may not yet have `items_per_pack`; do not send it unless set.
+    const payload: any = {
       id: item.id,
+      // brand_id is nullable in schema but may be required by RLS in some deployments.
+      brand_id: resolvedBrandId,
       item_code: item.code,
       name: item.name,
-      // prefer precise textual unit if provided (e.g., 'g','ml'), otherwise store base unitType
-      unit: (item as any).unitText && String((item as any).unitText).trim() ? (item as any).unitText : item.unitType,
-      cost_per_unit: item.currentCost ?? null,
+      department_id: item.departmentId ?? null,
+      supplier_id: item.supplierId ?? null,
+      // Prefer precise textual unit if provided (e.g., 'g','ml'); otherwise store base unitType.
+      unit:
+        (item as any).unitText && String((item as any).unitText).trim()
+          ? String((item as any).unitText).trim()
+          : item.unitType,
       current_stock: item.currentStock ?? 0,
+      cost_per_unit: item.currentCost ?? 0,
+      lowest_cost: item.lowestCost ?? 0,
+      highest_cost: item.highestCost ?? 0,
+      // Prefer reorder_level; also write min_stock_level for legacy compatibility.
+      reorder_level: item.reorderLevel ?? null,
       min_stock_level: item.reorderLevel ?? null,
-    } as any;
-    const { error } = await supabase.from('stock_items').insert(payload);
-    if (!error) {
-      // refresh local state
-      await fetchFromDb();
-      return item;
+    };
+
+    if (item.itemsPerPack !== undefined && item.itemsPerPack !== null) {
+      payload.items_per_pack = item.itemsPerPack;
     }
-    console.warn('Supabase insert failed, falling back to local', error);
+
+    let error: any = null;
+    ({ error } = await supabase.from('stock_items').insert(payload));
+
+    // Backward compatibility: if the DB doesn't have `items_per_pack`, retry without it.
+    if (error && String(error.code ?? '') === '42703' && String(error.message ?? '').toLowerCase().includes('items_per_pack')) {
+      const { items_per_pack: _omit, ...retry } = payload;
+      ({ error } = await supabase.from('stock_items').insert(retry as any));
+    }
+
+    if (error) {
+      // Do not fall back to local when DB rejects the change; it will reappear/disappear on refresh.
+      throw error;
+    }
+
+    // refresh local state
+    await fetchFromDb();
+    return item;
   }
 
   const items = load();
@@ -151,17 +208,31 @@ export async function addStockItem(item: StockItem) {
 
 export async function updateStockItem(itemId: string, patch: Partial<StockItem>) {
   if (isSupabaseConfigured() && supabase) {
+    if (!currentBrandId) throw new Error('Missing brand id');
     const payload: any = {};
     if (patch.code !== undefined) payload.item_code = patch.code;
     if (patch.name !== undefined) payload.name = patch.name;
     if (patch.unitType !== undefined) payload.unit = patch.unitType;
     if (patch.currentCost !== undefined) payload.cost_per_unit = patch.currentCost;
     if (patch.currentStock !== undefined) payload.current_stock = patch.currentStock;
-    if (patch.reorderLevel !== undefined) payload.min_stock_level = patch.reorderLevel;
+    if (patch.lowestCost !== undefined) payload.lowest_cost = patch.lowestCost;
+    if (patch.highestCost !== undefined) payload.highest_cost = patch.highestCost;
+    if (patch.reorderLevel !== undefined) {
+      payload.reorder_level = patch.reorderLevel;
+      payload.min_stock_level = patch.reorderLevel;
+    }
+    if (patch.itemsPerPack !== undefined) payload.items_per_pack = patch.itemsPerPack;
     if (patch.supplierId !== undefined) payload.supplier_id = patch.supplierId;
     if (patch.departmentId !== undefined) payload.department_id = patch.departmentId;
 
-    const { error } = await supabase.from('stock_items').update(payload).eq('id', itemId);
+    let error: any = null;
+    ({ error } = await supabase.from('stock_items').update(payload).eq('id', itemId).eq('brand_id', currentBrandId));
+
+    // Backward compatibility: if the DB doesn't have `items_per_pack`, retry without it.
+    if (error && String(error.code ?? '') === '42703' && String(error.message ?? '').toLowerCase().includes('items_per_pack')) {
+      const { items_per_pack: _omit, ...retry } = payload;
+      ({ error } = await supabase.from('stock_items').update(retry as any).eq('id', itemId).eq('brand_id', currentBrandId));
+    }
     if (error) {
       console.warn('Supabase update failed', error);
       throw error;
@@ -192,16 +263,15 @@ export function upsertStockItem(item: StockItem) {
 export async function deleteStockItem(itemId: string) {
   // Try Supabase first
   if (isSupabaseConfigured() && supabase) {
-    try {
-      const { error } = await supabase.from('stock_items').delete().eq('id', itemId);
-      if (!error) {
-        await fetchFromDb();
-        return true;
-      }
-      console.warn('Supabase delete failed', error);
-    } catch (err) {
-      console.warn('Supabase delete error', err);
+    if (!currentBrandId) throw new Error('Missing brand id');
+    const { error } = await supabase.from('stock_items').delete().eq('id', itemId).eq('brand_id', currentBrandId);
+    if (error) {
+      // Do not fall back to local when DB rejects the change; it will come back on refresh.
+      throw error;
     }
+
+    await fetchFromDb();
+    return true;
   }
 
   // Fallback to local deletion
@@ -371,7 +441,13 @@ export async function deductStockItemsRemote(deductions: Array<{ itemId: string;
     const ids = deductions.map((d) => d.itemId);
     console.debug('[stockStore] attempting remote deduction (multi-step) for', { deductions, ids });
     // `stock_items` uses `cost_per_unit` column in DB
-    const { data, error } = await supabase.from('stock_items').select('id,current_stock,cost_per_unit').in('id', ids as string[]);
+    const brandId = currentBrandId;
+    if (!brandId) return applyStockDeductions(deductions);
+    const { data, error } = await supabase
+      .from('stock_items')
+      .select('id,current_stock,cost_per_unit')
+      .eq('brand_id', brandId)
+      .in('id', ids as string[]);
     if (error || !data) {
       console.warn('[stockStore] failed to fetch remote stock items, falling back to local', error);
       return applyStockDeductions(deductions);
@@ -400,7 +476,12 @@ export async function deductStockItemsRemote(deductions: Array<{ itemId: string;
       const after = Math.round((before - d.qty + Number.EPSILON) * 100) / 100;
       const unitCost = typeof row.cost_per_unit === 'number' ? row.cost_per_unit : 0;
 
-      const { data: updData, error: uErr, status: updStatus } = await supabase.from('stock_items').update({ current_stock: after }).eq('id', d.itemId).select('id,current_stock');
+      const { data: updData, error: uErr, status: updStatus } = await supabase
+        .from('stock_items')
+        .update({ current_stock: after })
+        .eq('id', d.itemId)
+        .eq('brand_id', brandId)
+        .select('id,current_stock');
       if (uErr) {
         console.warn('[stockStore] remote update failed for', d.itemId, { status: updStatus, error: uErr });
         // If a remote update fails, abort and fallback to local synchronous deduction

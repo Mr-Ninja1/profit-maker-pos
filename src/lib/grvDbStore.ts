@@ -247,3 +247,14 @@ export async function deleteGRV(grvId: string) {
 
   if (lastBrandId) await refreshGRVs(lastBrandId);
 }
+
+// DEV/ADMIN escape hatch: delete a GRV regardless of status.
+// WARNING: this does NOT roll back stock quantities/costs/ledger.
+export async function forceDeleteGRV(grvId: string) {
+  if (!supabase) throw new Error('Supabase not configured');
+
+  const { error } = await supabase.rpc('grv_force_delete', { p_grv_id: grvId });
+  if (error) throw error;
+
+  if (lastBrandId) await refreshGRVs(lastBrandId);
+}

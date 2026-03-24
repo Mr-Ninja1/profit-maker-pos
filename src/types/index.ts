@@ -33,6 +33,8 @@ export interface StockItem {
   name: string;
   departmentId: DepartmentId;
   unitType: UnitType;
+  /** For unitType=PACK, how many EACH are in 1 pack. Stored as `stock_items.items_per_pack` when available. */
+  itemsPerPack?: number;
   lowestCost: number;
   highestCost: number;
   currentCost: number;

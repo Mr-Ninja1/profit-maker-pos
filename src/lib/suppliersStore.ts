@@ -1,5 +1,6 @@
 import { suppliers as seededSuppliers } from '@/data/mockData';
 import { isSupabaseConfigured, supabase } from '@/lib/supabaseClient';
+import { getActiveBrandId, subscribeActiveBrandId } from '@/lib/activeBrand';
 
 export type SupplierRow = { id: string; name: string; code?: string };
 
@@ -12,6 +13,10 @@ type SuppliersSnapshot = {
 
 const STORAGE_KEY = 'pmx.suppliers.v1';
 const listeners = new Set<() => void>();
+
+function storageKeyForBrand(brandId: string | null) {
+  return `${STORAGE_KEY}.${brandId ? String(brandId) : 'none'}`;
+}
 
 function safeParse(raw: string | null): SuppliersSnapshot | null {
   if (!raw) return null;
@@ -33,10 +38,10 @@ function safeParse(raw: string | null): SuppliersSnapshot | null {
   }
 }
 
-function loadInitial(): SuppliersSnapshot {
+function loadInitial(brandId: string | null): SuppliersSnapshot {
   let raw: string | null = null;
   try {
-    raw = localStorage.getItem(STORAGE_KEY);
+    raw = localStorage.getItem(storageKeyForBrand(brandId));
   } catch {
     raw = null;
   }
@@ -50,12 +55,13 @@ function loadInitial(): SuppliersSnapshot {
   };
 }
 
-let snapshot: SuppliersSnapshot = loadInitial();
+let currentBrandId: string | null = getActiveBrandId();
+let snapshot: SuppliersSnapshot = loadInitial(currentBrandId);
 let inflight: Promise<void> | null = null;
 
 function persist() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+    localStorage.setItem(storageKeyForBrand(currentBrandId), JSON.stringify(snapshot));
   } catch {
     // ignore
   }
@@ -74,6 +80,14 @@ export function getSuppliersSnapshot() {
   return snapshot;
 }
 
+// Reset cached snapshot when brand changes to prevent cross-brand bleed.
+subscribeActiveBrandId(() => {
+  currentBrandId = getActiveBrandId();
+  inflight = null;
+  snapshot = loadInitial(currentBrandId);
+  emit();
+});
+
 export async function refreshSuppliers() {
   if (inflight) return inflight;
 
@@ -83,7 +97,13 @@ export async function refreshSuppliers() {
 
     try {
       if (isSupabaseConfigured() && supabase) {
-        const { data, error } = await supabase.from('suppliers').select('id,name,code').order('name', { ascending: true });
+        const brandId = currentBrandId;
+        if (!brandId) throw new Error('NO_BRAND');
+        const { data, error } = await supabase
+          .from('suppliers')
+          .select('id,name,code')
+          .eq('brand_id', brandId)
+          .order('name', { ascending: true });
         if (error) throw error;
         if (Array.isArray(data)) {
           snapshot = {
@@ -111,6 +131,17 @@ export async function refreshSuppliers() {
       persist();
       emit();
     } catch (e: any) {
+      if (String(e?.message ?? '') === 'NO_BRAND') {
+        snapshot = {
+          suppliers: (seededSuppliers ?? []).map((s) => ({ id: String((s as any).id), name: String((s as any).name ?? ''), code: (s as any).code ?? undefined })),
+          status: 'ready',
+          lastLoadedAt: Date.now(),
+          error: null,
+        };
+        persist();
+        emit();
+        return;
+      }
       snapshot = {
         ...snapshot,
         status: 'error',
@@ -138,7 +169,12 @@ export async function addSupplier(input: { name: string; code?: string }) {
   if (!name) return;
 
   if (isSupabaseConfigured() && supabase) {
-    const { data, error } = await supabase.from('suppliers').insert({ name, code }).select('id,name,code').single();
+    if (!currentBrandId) throw new Error('Missing brand id');
+    const { data, error } = await supabase
+      .from('suppliers')
+      .insert({ name, code, brand_id: currentBrandId })
+      .select('id,name,code')
+      .single();
     if (error) throw error;
 
     const row: SupplierRow = {
@@ -194,6 +230,7 @@ export async function updateSupplier(id: string, patch: { name?: string; code?: 
     .from('suppliers')
     .update(updateRow)
     .eq('id', supplierId)
+    .eq('brand_id', currentBrandId ?? '__no_brand__')
     .select('id,name,code')
     .single();
   if (error) throw error;
@@ -219,7 +256,11 @@ export async function deleteSupplier(id: string) {
   if (!supplierId) return;
 
   if (isSupabaseConfigured() && supabase && !supplierId.startsWith('local-')) {
-    const { error } = await supabase.from('suppliers').delete().eq('id', supplierId);
+    const { error } = await supabase
+      .from('suppliers')
+      .delete()
+      .eq('id', supplierId)
+      .eq('brand_id', currentBrandId ?? '__no_brand__');
     if (error) throw error;
   }
 

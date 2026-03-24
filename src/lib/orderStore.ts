@@ -4,8 +4,15 @@ import { flushQueuedOrders } from '@/lib/offlineOrderQueue';
 import { isSupabaseConfigured, supabase } from '@/lib/supabaseClient';
 import { ensureRecipesLoaded, getManufacturingRecipesSnapshot } from '@/lib/manufacturingRecipeStore';
 import { logSensitiveAction } from '@/lib/systemAuditLog';
+import { getActiveBrandId, subscribeActiveBrandId } from '@/lib/activeBrand';
 
 const STORAGE_KEY = 'mthunzi.orders.v1';
+
+function storageKeyForBrand(brandId: string | null) {
+  return `${STORAGE_KEY}.${brandId ? String(brandId) : 'none'}`;
+}
+
+let currentBrandId: string | null = getActiveBrandId();
 
 export type StoredOrdersV1 = {
   version: 1;
@@ -13,7 +20,7 @@ export type StoredOrdersV1 = {
 };
 
 function load(): StoredOrdersV1 {
-  const raw = localStorage.getItem(STORAGE_KEY);
+  const raw = localStorage.getItem(storageKeyForBrand(currentBrandId));
   if (raw) {
     try {
       return JSON.parse(raw) as StoredOrdersV1;
@@ -22,19 +29,26 @@ function load(): StoredOrdersV1 {
     }
   }
   const init: StoredOrdersV1 = { version: 1, orders: [] };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(init));
+  localStorage.setItem(storageKeyForBrand(currentBrandId), JSON.stringify(init));
   return init;
 }
 
 function save(state: StoredOrdersV1) {
   inMemoryState = state;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  localStorage.setItem(storageKeyForBrand(currentBrandId), JSON.stringify(state));
   emit();
 }
 
 type Listener = () => void;
 const listeners = new Set<Listener>();
 let inMemoryState: StoredOrdersV1 | null = null;
+
+// Reset cached orders when brand changes to prevent cross-brand bleed.
+subscribeActiveBrandId(() => {
+  currentBrandId = getActiveBrandId();
+  inMemoryState = null;
+  emit();
+});
 
 function emit() {
   for (const l of listeners) l();
@@ -58,6 +72,7 @@ async function sendOrderToSupabase(order: Order) {
 
   const payloadOrder: any = {
     id: order.id,
+    brand_id: currentBrandId,
     order_no: order.orderNo,
     table_no: order.tableNo ?? null,
     order_type: order.orderType,
@@ -83,6 +98,7 @@ async function sendOrderToSupabase(order: Order) {
   // Prepare items payload
   const itemsPayload = order.items.map((it) => ({
     order_id: remoteOrderId,
+    brand_id: currentBrandId,
     menu_item_id: it.menuItemId,
     menu_item_code: it.menuItemCode,
     menu_item_name: it.menuItemName,
