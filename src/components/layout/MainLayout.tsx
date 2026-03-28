@@ -29,8 +29,9 @@ export function MainLayout() {
 
   const isPosTerminal = location.pathname === '/app/pos' || location.pathname.startsWith('/app/pos/terminal');
   const isSelfOrder = location.pathname.startsWith('/app/self-order/');
+  const isKitchenDisplay = location.pathname === '/app/pos/kitchen';
 
-  if (isPosTerminal || isSelfOrder) {
+  if (isPosTerminal || isSelfOrder || isKitchenDisplay) {
     return (
       <div className="min-h-screen w-full bg-background">
         <Outlet />

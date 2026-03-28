@@ -86,6 +86,10 @@ export default function POSTerminal() {
 
   const isCashier = user?.role === 'cashier';
 
+  // Debug modal for send to kitchen
+  const [showDebugModal, setShowDebugModal] = useState(false);
+  const [debugItems, setDebugItems] = useState<OrderItem[]>([]);
+
   const getShiftStorageKey = () => {
     const staffId = user?.id ? String(user.id) : 'unknown';
     return `${CASHIER_SHIFT_KEY_PREFIX}${staffId}`;
@@ -369,7 +373,34 @@ export default function POSTerminal() {
 
   const addItemWithQty = (menuItem: POSMenuItem, qty: number) => {
     const safeQty = Math.max(1, Math.floor(qty));
-    for (let i = 0; i < safeQty; i++) addItem(menuItem);
+    setOrderItems(prevOrderItems => {
+      const existing = prevOrderItems.find((oi) => oi.menuItemId === menuItem.id);
+      if (existing) {
+        return prevOrderItems.map((oi) => {
+          if (oi.id !== existing.id) return oi;
+          const nextQty = oi.quantity + safeQty;
+          return {
+            ...oi,
+            quantity: nextQty,
+            total: computeLineTotal(oi.unitPrice, nextQty, oi.discountPercent),
+          };
+        });
+      }
+      const newItem: OrderItem = {
+        id: `oi-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        menuItemId: menuItem.id,
+        menuItemCode: menuItem.code,
+        menuItemName: menuItem.name,
+        quantity: safeQty,
+        unitPrice: menuItem.price,
+        unitCost: menuItem.cost,
+        discountPercent: 0,
+        total: computeLineTotal(menuItem.price, safeQty, 0),
+        isVoided: false,
+        sentToKitchen: false,
+      };
+      return [...prevOrderItems, newItem];
+    });
   };
   
   const orderTotals = useMemo(() => {
@@ -396,7 +427,8 @@ export default function POSTerminal() {
   }, [orderItems, orderDiscountPercent]);
 
   const addItem = (menuItem: POSMenuItem) => {
-    const existing = orderItems.find((oi) => oi.menuItemId === menuItem.id && !oi.isVoided);
+    console.log('[addItem] called for', menuItem.name, menuItem.id);
+    const existing = orderItems.find((oi) => oi.menuItemId === menuItem.id);
     if (existing) {
       setOrderItems(
         orderItems.map((oi) => {
@@ -509,7 +541,7 @@ export default function POSTerminal() {
     if (opts?.openPayment) setShowPayment(true);
   };
 
-  const upsertActiveOrder = (params: { status: Order['status']; paymentMethod?: PaymentMethod; sent?: boolean }) => {
+  const upsertActiveOrder = (params: { status: Order['status']; paymentMethod?: PaymentMethod; sent?: boolean; items?: OrderItem[] }) => {
     const now = new Date().toISOString();
     const tableNo = orderType === 'eat_in' ? selectedTable : null;
 
@@ -523,6 +555,12 @@ export default function POSTerminal() {
     const sentAt = params.status === 'sent' ? (existing?.sentAt ?? now) : existing?.sentAt;
     const paidAt = params.status === 'paid' ? now : existing?.paidAt;
 
+    // Use merged items if provided, otherwise use orderItems
+    const itemsToSave = (params.items ?? orderItems).map((item) => ({
+      ...item,
+      sentToKitchen: params.sent ? true : item.sentToKitchen,
+    }));
+
     const order: Order = {
       id,
       orderNo,
@@ -532,10 +570,7 @@ export default function POSTerminal() {
       status: params.status,
       staffId: user?.id ?? 'unknown',
       staffName: user?.name ?? 'Unknown',
-      items: orderItems.map((item) => ({
-        ...item,
-        sentToKitchen: params.sent ? true : item.sentToKitchen,
-      })),
+      items: itemsToSave,
       subtotal: orderTotals.subtotal,
       discountAmount: orderTotals.discountAmount,
       discountPercent: orderTotals.discountPercent,
@@ -683,29 +718,54 @@ export default function POSTerminal() {
     try {
       await applyRecipeDeductionsOrThrow();
 
-      const saved = upsertActiveOrder({ status: 'sent', sent: true });
+      // Merge duplicate items by menuItemId BEFORE saving
+      const mergedItems = orderItems.reduce((acc, it) => {
+        const existing = acc.find(a => a.menuItemId === it.menuItemId && !a.isVoided);
+        if (existing) {
+          existing.quantity += it.quantity;
+          existing.total += it.total;
+        } else {
+          acc.push({ ...it });
+        }
+        return acc;
+      }, [] as OrderItem[]);
+
+      // Save the merged order
+      const saved = upsertActiveOrder({ status: 'sent', sent: true, items: mergedItems });
+
+      // If items were merged, update the order
+      let finalSaved = saved;
+      if (mergedItems.length !== saved.items.length) {
+        const updatedOrder = { ...saved, items: mergedItems };
+        upsertOrder(updatedOrder);
+        finalSaved = updatedOrder;
+      }
+
+      // Debug: show merged items
+      setDebugItems(mergedItems);
+      setShowDebugModal(true);
 
       // mark local items as sent
-      setOrderItems(orderItems.map(item => ({ ...item, sentToKitchen: true })));
+      setOrderItems(mergedItems.map(item => ({ ...item, sentToKitchen: true })));
 
       // also attempt an explicit server upsert using snake_case payloads
       try {
         const orderData = {
-          id: saved.id,
-          order_no: saved.orderNo,
-          status: saved.status,
-          order_type: saved.orderType,
-          table_no: saved.tableNo ?? null,
-          subtotal: saved.subtotal,
-          total: saved.total,
-          staff_id: saved.staffId,
-          staff_name: saved.staffName,
-          created_at: saved.createdAt,
-          sent_at: saved.sentAt ?? null,
+          id: finalSaved.id,
+          order_no: finalSaved.orderNo,
+          status: finalSaved.status,
+          order_type: finalSaved.orderType,
+          table_no: finalSaved.tableNo ?? null,
+          subtotal: finalSaved.subtotal,
+          total: finalSaved.total,
+          staff_id: finalSaved.staffId,
+          staff_name: finalSaved.staffName,
+          created_at: finalSaved.createdAt,
+          sent_at: finalSaved.sentAt ?? null,
         };
 
-        const itemsData = (saved.items ?? []).map((it) => ({
-          order_id: saved.id,
+        const itemsData = (finalSaved.items ?? []).map((it) => ({
+          order_id: finalSaved.id,
           menu_item_id: it.menuItemId,
           menu_item_code: it.menuItemCode,
           menu_item_name: it.menuItemName,
@@ -719,7 +779,7 @@ export default function POSTerminal() {
           is_voided: it.isVoided ?? false,
           sent_to_kitchen: Boolean(it.sentToKitchen),
           kitchen_status: 'pending',
-          created_at: saved.createdAt,
+          created_at: finalSaved.createdAt,
         }));
 
         const { data, error } = await sendOrderPayload(orderData, itemsData);
@@ -1779,6 +1839,25 @@ export default function POSTerminal() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={showDebugModal} onOpenChange={setShowDebugModal}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Debug: Items Sent to Kitchen</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2">
+            {debugItems.map((item, index) => (
+              <div key={index} className="flex justify-between">
+                <span>{item.menuItemName}</span>
+                <span>×{item.quantity}</span>
+              </div>
+            ))}
+          </div>
+          <div className="mt-4">
+            <Button onClick={() => setShowDebugModal(false)}>Close</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

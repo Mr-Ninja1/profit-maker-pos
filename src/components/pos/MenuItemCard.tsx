@@ -115,8 +115,12 @@ export default function MenuItemCard({ item, onAdd, className }: Props) {
         } catch (err) {
           console.error('[MenuItemCard] click error computing lowStock details', err);
         }
-        console.debug('[MenuItemCard] click', { code: item.code, lowStock });
-        onAdd(item);
+        console.log('[MenuItemCard] click', { code: item.code, lowStock });
+        let clickFired = false;
+        if (!clickFired) {
+          clickFired = true;
+          onAdd(item);
+        }
       }}
       role="button"
       tabIndex={0}

@@ -20,7 +20,6 @@ import {
   clearKitchenForOrder,
   ensureKitchenItemsFromOrders,
   getKitchenSnapshot,
-  subscribeKitchen,
   upsertKitchenItemStatus,
   type KitchenItemStatus,
 } from '@/lib/kitchenStore';
@@ -41,7 +40,13 @@ export default function KitchenDisplay() {
   }, []);
 
   const orders = useSyncExternalStore(subscribeOrders, getOrdersSnapshot, getOrdersSnapshot);
-  const kitchen = useSyncExternalStore(subscribeKitchen, getKitchenSnapshot, getKitchenSnapshot);
+
+  // Local state for kitchen items to force re-renders
+  const [localKitchenItems, setLocalKitchenItems] = useState(() => getKitchenSnapshot().items);
+
+  console.log('KitchenDisplay render - orders.length:', orders.length);
+  console.log('Orders:', orders.map(o => ({ id: o.id, status: o.status, items: o.items.filter(i => i.sentToKitchen).length })));
+  console.log('Local kitchen items:', localKitchenItems);
 
   const [now, setNow] = useState(() => Date.now());
   const [query, setQuery] = useState('');
@@ -122,9 +127,10 @@ export default function KitchenDisplay() {
 
   const kitchenKey = useMemo(() => {
     const m = new Map<string, KitchenItemStatus>();
-    for (const it of kitchen.items) m.set(`${it.orderId}:${it.itemId}`, it.status);
+    for (const it of localKitchenItems) m.set(`${it.orderId}:${it.itemId}`, it.status);
+    console.log('kitchenKey updated, size:', m.size, 'entries:', Array.from(m.entries()));
     return m;
-  }, [kitchen.items]);
+  }, [localKitchenItems]);
 
   function getItemStatus(order: (typeof orders)[number], item: (typeof orders)[number]['items'][number]): KitchenItemStatus {
     // Prefer DB-backed `kitchenStatus` or `preparedAt`, then fall back to local kitchen store
@@ -135,7 +141,9 @@ export default function KitchenDisplay() {
       return 'pending';
     }
     if (item.preparedAt) return 'ready';
-    return kitchenKey.get(`${order.id}:${item.id}`) ?? 'pending';
+    const kitchenStatus = kitchenKey.get(`${order.id}:${item.id}`) ?? 'pending';
+    console.log('getItemStatus for', order.id, item.id, ':', kitchenStatus, 'preparedAt:', item.preparedAt);
+    return kitchenStatus;
   }
 
   function getElapsedMinutes(order: (typeof orders)[number]) {
@@ -145,11 +153,31 @@ export default function KitchenDisplay() {
   }
 
   function setItem(orderId: string, itemId: string, status: KitchenItemStatus, preparedAt?: string) {
+    console.log('setItem called:', orderId, itemId, status);
     upsertKitchenItemStatus({ orderId, itemId, status });
     // Persist "ready" state into the real order so it survives device changes.
     if (status === 'ready') markOrderItemPrepared({ orderId, itemId, prepared: true });
     // If we revert from ready, we remove preparedAt.
     if (status !== 'ready' && preparedAt) markOrderItemPrepared({ orderId, itemId, prepared: false });
+    
+    // Update local state to force re-render
+    setLocalKitchenItems(prev => {
+      const existingIndex = prev.findIndex(item => item.orderId === orderId && item.itemId === itemId);
+      const newItem = {
+        orderId,
+        itemId,
+        status,
+        updatedAt: new Date().toISOString()
+      };
+      
+      if (existingIndex >= 0) {
+        const updated = [...prev];
+        updated[existingIndex] = newItem;
+        return updated;
+      } else {
+        return [...prev, newItem];
+      }
+    });
   }
 
   function isTicketComplete(order: (typeof orders)[number]) {
@@ -160,7 +188,7 @@ export default function KitchenDisplay() {
 
   const activeOrders = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return orders
+    const result = orders
       .filter((o) => ['sent', 'ready', 'paid', 'open'].includes(o.status))
       .filter((o) => o.items.some((i) => i.sentToKitchen === true && (i.kitchenStatus ?? null) !== 'served' && !i.isVoided))
       .filter((o) => {
@@ -169,6 +197,9 @@ export default function KitchenDisplay() {
         return hay.includes(q);
       })
       .sort((a, b) => new Date(a.sentAt ?? a.createdAt).getTime() - new Date(b.sentAt ?? b.createdAt).getTime());
+    
+    console.log('activeOrders:', result.length, result.map(o => ({ id: o.id, status: o.status, items: o.items.length })));
+    return result;
   }, [orders, query]);
 
   useEffect(() => {
@@ -224,17 +255,40 @@ export default function KitchenDisplay() {
     prevUrgentIdsRef.current = urgentIds;
   }, [activeOrders, now, soundEnabled]);
 
+  // Helper function to check if an order has been started (has any items in preparing or ready status)
+  function isOrderStarted(order: (typeof orders)[number]) {
+    const kitchenItems = order.items.filter((i) => i.sentToKitchen && !i.isVoided);
+    const result = kitchenItems.some((it) => {
+      const status = getItemStatus(order, it);
+      return status === 'preparing' || status === 'ready';
+    });
+    console.log('isOrderStarted for order', order.id, ':', result, 'kitchenItems:', kitchenItems.length);
+    return result;
+  }
+
   const pendingTickets = useMemo(
-    () => activeOrders.filter((o) => o.status === 'sent' && !isTicketComplete(o)),
-    [activeOrders]
+    () => {
+      const result = activeOrders.filter((o) => o.status === 'sent' && !isOrderStarted(o));
+      console.log('pendingTickets:', result.length, result.map(o => o.id));
+      return result;
+    },
+    [activeOrders, localKitchenItems]
   );
   const inProgressTickets = useMemo(
-    () => activeOrders.filter((o) => o.status === 'sent' && isTicketComplete(o) === false && o.items.some((it) => getItemStatus(o.id, it.id, it.preparedAt) === 'preparing')),
-    [activeOrders, kitchenKey]
+    () => {
+      const result = activeOrders.filter((o) => o.status === 'sent' && isOrderStarted(o) && !isTicketComplete(o));
+      console.log('inProgressTickets:', result.length, result.map(o => o.id));
+      return result;
+    },
+    [activeOrders, localKitchenItems]
   );
   const readyTickets = useMemo(
-    () => activeOrders.filter((o) => o.status === 'ready' || (o.status === 'sent' && isTicketComplete(o))),
-    [activeOrders]
+    () => {
+      const result = activeOrders.filter((o) => o.status === 'ready' || (o.status === 'sent' && isTicketComplete(o)));
+      console.log('readyTickets:', result.length, result.map(o => o.id));
+      return result;
+    },
+    [activeOrders, localKitchenItems]
   );
 
   const urgentCount = useMemo(
@@ -251,6 +305,20 @@ export default function KitchenDisplay() {
     const urgent = elapsed >= 15;
     const complete = isTicketComplete(order);
     const kitchenItems = order.items.filter((i) => i.sentToKitchen && !i.isVoided);
+
+    // Group kitchenItems by menuItemId and sum quantities
+    const groupedKitchenItems = Object.values(kitchenItems.reduce((acc, it) => {
+      if (!acc[it.menuItemId]) {
+        acc[it.menuItemId] = { ...it };
+      } else {
+        acc[it.menuItemId].quantity += it.quantity;
+        // Optionally, merge statuses: if any is not ready, show the least advanced status
+        if (getItemStatus(order, it) !== 'ready') {
+          acc[it.menuItemId].status = getItemStatus(order, it);
+        }
+      }
+      return acc;
+    }, {}));
 
     return (
       <motion.div layout {...motionProps} transition={{ duration: 0.18 }}>
@@ -291,14 +359,14 @@ export default function KitchenDisplay() {
 
           <CardContent className="pt-0">
             <div className="space-y-2">
-              {kitchenItems.map((it) => {
-                const status = getItemStatus(order.id, it.id, it.preparedAt);
+              {groupedKitchenItems.map((it) => {
+                const status = getItemStatus(order, it);
                 const isReady = status === 'ready';
                 const isPreparing = status === 'preparing';
 
                 return (
                   <div
-                    key={it.id}
+                    key={it.menuItemId}
                     className={cn(
                       'rounded-lg border p-3 transition-colors',
                       isReady ? 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-500/30' : 'bg-background'
@@ -327,52 +395,59 @@ export default function KitchenDisplay() {
                         </Badge>
                       </div>
                     </div>
-
-                    <div className="mt-3 flex gap-2">
-                      <Button
-                        size="sm"
-                        variant={isPreparing ? 'default' : 'outline'}
-                        className="gap-2"
-                        onClick={() => setItem(order.id, it.id, 'preparing', it.preparedAt)}
-                        disabled={isReady}
-                      >
-                        <Play className="h-4 w-4" /> Start
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant={isReady ? 'default' : 'outline'}
-                        className={cn('gap-2', isReady && 'bg-emerald-600 hover:bg-emerald-600 text-white')}
-                        onClick={() => setItem(order.id, it.id, 'ready', it.preparedAt)}
-                      >
-                        <Check className="h-4 w-4" /> Done
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="gap-2"
-                        onClick={() => setItem(order.id, it.id, 'pending', it.preparedAt)}
-                      >
-                        <Undo2 className="h-4 w-4" /> Undo
-                      </Button>
-                    </div>
                   </div>
                 );
               })}
             </div>
 
+            {/* Order Lifecycle Buttons */}
             <div className="mt-4 flex gap-2">
-              {order.status !== 'ready' ? (
+              {!isOrderStarted(order) ? (
+                // Order not started - show Start All Pending
                 <Button
                   className="flex-1 gap-2"
                   onClick={() => {
-                    if (!isTicketComplete(order)) return;
+                    console.log('Start Order clicked for order:', order.id);
+                    // Start all pending items
+                    kitchenItems
+                      .filter((it) => getItemStatus(order, it) === 'pending')
+                      .forEach((it) => {
+                        console.log('Starting item:', it.id);
+                        setItem(order.id, it.id, 'preparing', it.preparedAt);
+                      });
+                  }}
+                >
+                  <Play className="h-4 w-4" /> Start Order
+                </Button>
+              ) : !complete ? (
+                // Order started but not complete - show Done button
+                <Button
+                  className="flex-1 gap-2"
+                  onClick={() => {
+                    console.log('Order Done clicked for order:', order.id);
+                    // Mark all items as ready
+                    kitchenItems
+                      .filter((it) => getItemStatus(order, it) !== 'ready')
+                      .forEach((it) => {
+                        console.log('Marking item as ready:', it.id);
+                        setItem(order.id, it.id, 'ready', it.preparedAt);
+                      });
+                  }}
+                >
+                  <Check className="h-4 w-4" /> Order Done
+                </Button>
+              ) : order.status !== 'ready' ? (
+                // Order complete - show Mark Ticket Ready
+                <Button
+                  className="flex-1 gap-2"
+                  onClick={() => {
                     markOrderReady(order.id);
                   }}
-                  disabled={!complete}
                 >
                   <CheckCircle2 className="h-4 w-4" /> Mark Ticket Ready
                 </Button>
               ) : (
+                // Order ready - show Clear (Served)
                 <Button
                   className="flex-1 gap-2"
                   variant="default"
