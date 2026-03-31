@@ -1,103 +1,22 @@
-Profit Maker POS
-Profit Maker POS is a modern, offline-first point-of-sale web app with Electron desktop support and rich analytics.
-Includes:
+# Project Title: Profit Maker POS
 
-Sales, inventory, orders, cashier shifts
-Offline sync + auto-queue
-CSV/DOC/PDF export & WhatsApp share
-Native Electron mode (kiosk, printer integration)
-GAAP cost/purchase/stock variance intelligence
-🚀 Project status
- Core POS terminal workflows
- Ghost UI refresh + themed dashboard
- Stock take 30-day defaults
- Date range aware analytics
- Export toolbar (single button + dropdown)
- Booking/variance cards loading states
- Electron splash race-handling + recovery
- App Service / Azure deployment path ready
-🧰 Tech stack
-Frontend: React + Vite + Tailwind
-Styling: Radix UI + custom components
-Data layer: local state + Dexie / Realtime (supabase)
-PDF export: jsPDF / autoTable
-Excel/CSV: <table> + export helper
-Electron: main.cjs (kiosk mode)
-Build: electron-builder
-CI/CD: GitHub Actions -> Azure App Service
-📦 Install
-🧪 Dev
-🏗 Build
-✅ Run locally (static preview)
-🧾 Repo setup (after transfer/org)
-Ensure release is ignored:
-.gitignore
-release
-build
-package.json includes Node engines (22+):
-📦 Electron run
-Troubleshoot stuck blue/
-Check main.cjs splash fallback (20s).
-Console logs: Failed to load main window.
-📊 Important routes
-Dashboard: /app or /dashboard
-Stock-take: /app/inventory/stock-take
-Reports: /app/reports
-POS: /app/pos
-📥 Export features
-Export dropdown:
-All Metrics (CSV/DOC/PDF)
-Share via WhatsApp
-Per-card Export
-Date-limited daily KPI report
-“Reporting Range” label:
-Today’s reports vs range
-💡 Admin instructions
-Owner must install GitHub Azure App:
-GitHub org > Settings > Installed GitHub Apps
-allow target repo access
-Add collaborator level:
-Repo > Settings > Manage access (Write/Admin)
-If org restrictions, import repo:
-GitHub /new/import or transfer ownership.
-🌐 Azure App Service deployment (Option B)
-Azure Portal -> App Service -> Create
-Runtime: Node 22
-Deployment Center: GitHub -> main
-Build command: npm run build
-Startup:
-npm run start (with server.js) or npx serve dist -p 8080
-📄 Essential docs for engineers
-main.cjs - native workflow + splash/fallback.
-Dashboard.tsx - date range logic, KPI panel + export.
-StockTake.tsx - 30-day default + fetch.
-useReportSharer.ts - PDF/CSV/DOC/WhatsApp.
-dashboardMetrics.ts - metrics computations.
-orderStore.ts / stockStore.ts / expenseStore.ts - state persistence.
-🧹 Git PR release checklist
- git status clean
- no win-unpacked tracked
- main branch has all merges
- Node engine pinned in package.json
- npm run build passes
- Azure deployment pipeline green
- Smoke test dashboard + stock + export + POS
-🛠 Post-deploy tests for clients
-Visit: [APP_URL]
-Check dashboard shows:
-range label
-non-empty KPIs
-Set date range and verify values update
-Export all metrics CSV, DOC, PDF, WhatsApp.
-Stock Take: 30-day default + refresh.
-Electron builds run with splash / no blue hang.
-📫 Contact
-Primary: your maintainer/dev lead
-Backup: support@example.com
-🔐 License
-MIT / whichever holds for your company.
+## Executive Summary
+Profit Maker POS is a powerful point-of-sale system designed to enhance the retail experience for both businesses and customers. This application streamlines sales processes, inventory management, and customer relationship management.
 
-Copy this README.md into root, commit, and push.
-This is now a professional delivery doc to hand to your client and testers.
+## Features Overview
+- **User-Friendly Interface**: Intuitive and easy-to-use design for a seamless experience.
+- **Inventory Management**: Keep track of stock levels and manage product catalogs.
+- **Sales Tracking**: Monitor sales performance and generate reports.
+- **Customer Management**: Store customer information and purchase history.
+- **Secure Payments**: Support for multiple payment methods with secure transactions.
 
-Raptor mini (Preview) • 0x
+## Tech Stack
+- **Frontend**: React, Redux
+- **Backend**: Node.js, Express
+- **Database**: MongoDB
+- **Deployment**: Docker, Azure
+
+## Installation and Setup Instructions
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/Mr-Ninja1/profit-maker-pos.git
